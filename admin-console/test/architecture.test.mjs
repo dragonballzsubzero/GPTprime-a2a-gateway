@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {assessArchitecture} from '../architecture/assess.mjs';
+test('absent facts fail closed',()=>{const x=assessArchitecture({});assert.equal(x.qualified,false);assert.equal(x.dispatch_authorized,false);assert(x.items.every(v=>v.state!=='VERIFIED'))});
+test('database row counts are not equivalent to remote provider proof',()=>{const x=assessArchitecture({counts:{enrolled_nodes:100,capability_proofs:100,execution_contracts:100,execution_results:100,transport_receipts:100},telemetry:{production_qualified:true,qualified_providers:3},privilege:{aal:'aal2'}});assert.equal(x.qualified,false);assert.equal(x.dispatch_authorized,false);assert(x.items.some(a=>a.state==='CLAIM_REQUIRES_INDEPENDENT_PROOF'))});
+test('string numbers and booleans do not promote evidence',()=>{const x=assessArchitecture({counts:{enrolled_nodes:'100'},telemetry:{production_qualified:'true',qualified_providers:'3'}});assert.equal(x.items.find(q=>q.name==='Node enrollment').state,'BLOCKED');assert.equal(x.items.find(q=>q.name==='Production federation').state,'BLOCKED')});
+test('owner is not inferred from AAL1',()=>{const x=assessArchitecture({privilege:{aal:'aal1'}});assert.equal(x.items[0].state,'UNVERIFIED')});
+test('null snapshots rejected',()=>assert.throws(()=>assessArchitecture(null),/INVALID_BACKEND_SNAPSHOT/));
