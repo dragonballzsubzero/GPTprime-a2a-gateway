@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {inspectEvidence} from '../src/evidence.mjs';
+const H='a'.repeat(64);
+const common=()=>({version:'SAC-SCIENCE-EVIDENCE-1',domain:'mitochondrial',claim_id:'research.case_001',claim:'Controlled assay',raw_data_sha256:H,raw_size_bytes:1024,protocol_id:'prereg-1',acquired_utc:'2026-11-01T12:00:00Z',instrument_id:'instrument.001',calibration_sha256:H,custodian_id:'custodian.001',controls:['matched-control'],synthetic:false,genetic_code_corrected:true,import_topology_tested:true,analysis:{preregistered:true,n:12,primary_endpoint:'ATP synthesis',effect_estimate:0.2,confidence_interval:[0.01,0.4],p_value:0.04},outcomes:Object.fromEntries(['translation','mitochondrial_import','membrane_insertion','complex_assembly','functional_readout'].map(s=>[s,{assay_id:s,raw_data_sha256:H,control_id:'ctrl'}]))});
+const neural=()=>({...common(),domain:'endovascular_bci',validation_split:{heldout_sessions:true,heldout_participants:true},electrode_geometry_id:'geometry.01',artifact_control_id:'artifact.01',decoding_accuracy:.76,baseline_accuracy:.5});
+test('complete mitochondrial metadata is review-ready but never validated',()=>{const r=inspectEvidence(common());assert.equal(r.state,'ready_for_external_review');assert.equal(r.scientifically_validated,false);});
+test('missing mitochondrial import data blocks research promotion',()=>{const e=common();delete e.outcomes.mitochondrial_import;assert.equal(inspectEvidence(e).state,'incomplete');assert.match(inspectEvidence(e).problems.join(','),/MITO_STAGE_MITOCHONDRIAL_IMPORT/);});
+test('synthetic research data cannot pass a live-data evidence gate',()=>{const e=common();e.synthetic=true;assert.ok(inspectEvidence(e).problems.includes('REAL_DATA_REQUIRED'));});
+test('missing held-out participants prevents BCI generalization claim',()=>{const e=neural();e.validation_split.heldout_participants=false;assert.ok(inspectEvidence(e).problems.includes('BCI_PARTICIPANT_GENERALIZATION_MISSING'));});
+test('biologically implausible p-value rejects record',()=>{const e=common();e.analysis.p_value=-0.3;assert.ok(inspectEvidence(e).problems.includes('P_VALUE'));});
+test('valid BCI metadata remains review-only, never proves clinical effect',()=>{const r=inspectEvidence(neural());assert.equal(r.state,'ready_for_external_review');assert.equal(r.scientifically_validated,false);});
