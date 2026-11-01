@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import health from '../api/health.js';
+import ready from '../api/ready.js';
+import dispatch from '../api/dispatch.js';
+const req=(url,method='GET')=>new Request(url,{method});
+const read=async(r)=>({status:r.status, body:await r.json(), cache:r.headers.get('Cache-Control')});
+test('health is deployable, but not inference ready',async()=>{let r=await read(health.fetch(req('https://host.invalid/api/health')));assert.equal(r.status,200);assert.equal(r.body.production_qualified,false);assert.equal(r.body.signed_dispatch_enabled,false);assert.equal(r.cache,'no-store')});
+test('health rejects non-GET',async()=>{assert.equal((await health.fetch(req('https://host.invalid/api/health','POST'))).status,405)});
+test('readiness remains unavailable until owner/node/providers commissioned',async()=>{const r=await read(ready.fetch(req('https://host.invalid/api/ready')));assert.equal(r.status,503);assert.equal(r.body.status,'BLOCKED')});
+test('readiness rejects non-GET',async()=>{assert.equal((await ready.fetch(req('https://host.invalid/api/ready','POST'))).status,405)});
+test('dispatch fails closed for any unsigned or fake request',async()=>{for(const payload of ['{}','{"signed":"yes"}']){const r=await read(dispatch.fetch(new Request('https://host.invalid/api/dispatch',{method:'POST',headers:{'content-type':'application/json'},body:payload})));assert.equal(r.status,503);assert.equal(r.body.authorized_to_dispatch,false)}});
+test('dispatch wrong HTTP method rejected',async()=>{assert.equal((await dispatch.fetch(req('https://host.invalid/api/dispatch'))).status,405)});
