@@ -42,6 +42,20 @@ const recent=panel('Recent ingested records');const history=snapshot.recent_evid
 if(history.length)recent.append(table([{title:'Source',value:r=>r.connector_id},{title:'Type',value:r=>r.record_type},{title:'Status',value:r=>pill(r.provenance_status)},{title:'Acquired',value:r=>r.received_at?new Date(r.received_at).toLocaleString():'unknown'},{title:'SHA-256',value:r=>r.payload_sha256?.slice(0,20)+'…'||'unknown'}],history));
 else recent.append(el('p',{class:'empty'},'No evidence ingested yet.'));
 main.append(recent);
+const harvest=panel('Retrieve public research metadata');harvest.classList.add('form-fields');
+harvest.append(el('p',{class:'hint'},'Europe PMC public bibliographic index. Fixed, bounded searches; only metadata is saved and every record remains quarantined. One request per topic per hour.'));
+const topic=el('select',{id:'research-topic'});
+for(const [id,title] of [['mitochondrial_allotopy','Allotopic mitochondrial expression'],['mitochondrial_import','Mitochondrial protein import'],['endovascular_bci','Endovascular neural interfaces']])topic.append(el('option',{value:id},title));
+const fetchButton=el('button',{class:'primary',type:'button',id:'research-fetch'},'Fetch research metadata');
+fetchButton.disabled=snapshot.privilege?.aal!=='aal2';
+append(harvest,el('label',{for:'research-topic'},'Research topic'),topic,fetchButton,el('p',{class:'hint',id:'research-fetch-message'},fetchButton.disabled?'Verify your authenticator (AAL2) before running source retrieval.':'Up to four indexed publications per retrieval.'));
+main.append(harvest);
+fetchButton.addEventListener('click',async()=>{fetchButton.disabled=true;const message=$('research-fetch-message');message.textContent='Requesting indexed public metadata…';try{
+ const token=await ensureToken();
+ const result=await jsonReq('/api/harvest',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({topic:topic.value})});
+ await refreshData();const current=$('research-fetch-message');
+ if(current)current.textContent=`Europe PMC retrieval: ${result.received} records, ${result.stored} newly quarantined, ${result.duplicates} previously recorded; ${result.failed} storage errors. Upstream SHA-256: ${result.upstream_response_sha256}`;
+ }catch(err){if(message.isConnected)message.textContent='Research retrieval unavailable: '+err.message;}finally{const b=$('research-fetch');if(b)b.disabled=snapshot?.privilege?.aal!=='aal2';}});
 const form=panel('Submit a research source');form.classList.add('form-fields');const select=el('select',{id:'connector'});for(const item of snapshot.connectors||[]){const option=el('option',{value:item.connector_id},item.display_name);select.append(option);}append(form,el('label',{for:'connector'},'Source connector'),select,el('label',{for:'recordtype'},'Evidence type'));
 const record=el('select',{id:'recordtype'});for(const k of ['paper','technical_reference','provider_status','operational_observation','research_note'])record.append(el('option',{value:k},k.replaceAll('_',' ')));form.append(record);
 append(form,el('label',{for:'sourceurl'},'Public source URL (HTTPS)'),el('input',{id:'sourceurl',type:'url',placeholder:'https://doi.org/...'}),el('label',{for:'evidencejson'},'JSON metadata payload'),el('textarea',{id:'evidencejson',placeholder:'{"title":"Source paper", "doi":"10...", "finding":"..."}'}));
