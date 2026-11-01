@@ -1,0 +1,30 @@
+name: SAC Admin 1.2 Research Security
+on:
+  pull_request:
+    paths:
+      - 'admin-console/**'
+      - 'supabase/functions/sac-research-harvest-v1/**'
+      - 'supabase/migrations/20261101_sac_public_research_feed_v120.sql'
+      - '.github/workflows/admin-research-v12.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'admin-console/**'
+      - 'supabase/functions/sac-research-harvest-v1/**'
+      - '.github/workflows/admin-research-v12.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm --prefix admin-console test
+      - run: npm --prefix admin-console run check
+      - run: node --check supabase/functions/sac-research-harvest-v1/index.js
+      - run: node --check supabase/functions/sac-research-harvest-v1/normalize.mjs
