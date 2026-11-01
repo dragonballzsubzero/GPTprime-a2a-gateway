@@ -1,10 +1,16 @@
 {
   "name": "sac-a2a-transport-v034",
-  "version": "0.34.0",
+  "version": "0.34.1",
   "private": true,
   "type": "module",
   "description": "SAC signed Node.js transport integrity probe (not provider inference or BFT)",
-  "engines": {"node": ">=22.16.0 <23"},
-  "scripts": {"test": "node --test test/*.test.mjs", "start": "node src/server.mjs", "check": "node --check src/transport.mjs && node --check src/server.mjs && node --check src/cli.mjs"},
+  "engines": {
+    "node": ">=22.16.0 <23"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node src/server.mjs",
+    "check": "node --check src/transport.mjs && node --check src/server.mjs && node --check src/cli.mjs"
+  },
   "license": "UNLICENSED"
 }
