@@ -1,0 +1,20 @@
+name: SAC v0.34 integrity proof tests
+on:
+  push:
+  pull_request:
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install 'cryptography==46.0.4'
+      - run: npm run check
+      - run: npm test
