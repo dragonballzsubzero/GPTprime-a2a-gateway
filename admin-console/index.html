@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>SAC Mainframe | Command Center</title><link rel="stylesheet" href="/styles.css" defer></head>
+<body>
+ <div id="app" class="app-shell">
+  <aside class="rail">
+   <div class="identity"><div class="sigil">S<span>∕</span>C</div><div><strong>SAC MAINFRAME</strong><small>OPERATIONS CONSOLE · v1.0</small></div></div>
+   <nav id="nav" aria-label="Main navigation"><button class="active" data-view="overview">Overview</button><button data-view="federation">Federation</button><button data-view="integrations">Integrations</button><button data-view="evidence">Research evidence</button><button data-view="security">Security &amp; access</button></nav>
+   <div class="rail-footer"><span class="status-dot"></span><span id="environment">Authentication required</span></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="crumb">SAC / <span id="current-view">Overview</span></div><div class="actions"><span id="last-read" class="muted">No live query</span><button id="refresh" class="ghost" disabled>Refresh</button><button id="signout" class="ghost" hidden>Sign out</button></div></header>
+    <main id="main" aria-live="polite"><section class="page-intro"><span class="eyebrow">CONTROL PLANE</span><h1>Authenticate to access the SAC Mainframe</h1><p>Access is restricted to a verified Supabase owner identity and protected by the Vercel team deployment.</p></section>
+      <form id="login" class="panel form-panel"><h2>Owner sign-in</h2><label for="email">Registered email</label><input id="email" type="email" autocomplete="username" required placeholder="Registered email"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Your existing password"><button id="login-password" type="submit" class="primary">Sign in securely</button><div class="inline-controls"><button type="button" id="request-code" class="ghost">Email a sign-in code</button></div><label for="otp">Code from email (when enabled)</label><input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="One-time code"><button type="button" id="verify-code" class="ghost">Verify email code</button><p id="login-message" class="hint" role="status">Credentials are sent directly to Supabase Auth, never stored in GitHub or this console's backend.</p></form>
+    </main>
+    <footer>Evidence-aware operation · Signatures ≠ enrolled nodes ≠ verified inference · No simulated production statuses</footer>
+  </div>
+ </div>
+ <script type="module" src="/app.js"></script>
+</body></html>
