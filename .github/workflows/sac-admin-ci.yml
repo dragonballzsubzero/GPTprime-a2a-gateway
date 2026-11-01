@@ -1,0 +1,30 @@
+name: SAC Admin Console security checks
+on:
+  push:
+    paths:
+      - 'admin-console/**'
+      - '.github/workflows/sac-admin-ci.yml'
+  pull_request:
+    paths:
+      - 'admin-console/**'
+      - '.github/workflows/sac-admin-ci.yml'
+permissions:
+  contents: read
+jobs:
+  verify-admin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.16.0'
+      - name: Static checks
+        working-directory: admin-console
+        run: npm run check
+      - name: MFA and protected API regression suite
+        working-directory: admin-console
+        run: npm test
