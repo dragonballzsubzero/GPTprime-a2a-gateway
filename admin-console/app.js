@@ -1,4 +1,5 @@
 import {createMfaClient} from './mfa-client.mjs';
+import {assessArchitecture} from './architecture/assess.mjs';
 // SAC Admin Console v1 — no persisted credentials, no external JS dependencies.
 let settings=null, auth=null, snapshot=null, view='overview',busy=false, pendingMfa=null;
 const $=id=>document.getElementById(id);
@@ -105,7 +106,20 @@ function showMfaVerification(slot,factorId){
  }catch(e){status.textContent='MFA verification failed: '+e.message;}finally{btn.disabled=false;}});
 }
 
-function render(){main.replaceChildren();const views={overview:renderOverview,federation:renderFederation,integrations:renderIntegrations,evidence:renderEvidence,security:renderSecurity};(views[view]||renderOverview)();$('current-view').textContent=view.charAt(0).toUpperCase()+view.slice(1);document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}
+function renderArchitecture(){
+  main.append(intro('DESIGN HISTORY / CURRENT EVIDENCE','Architecture & release gates','This display reconciles original SAC obligations with the authenticated live database. A recorded signature, gateway uptime, or provider candidate never independently proves a running federated AI.'));
+  const result=assessArchitecture(snapshot);
+  const p=panel('Founder commissioning and independently verified execution');
+  const rows=el('div',{class:'architecture-gates'});
+  for(const item of result.items){
+    const r=el('div',{class:'panel'});
+    append(r,el('strong',{},item.name),el('p',{class:'hint'},item.limitation),el('p',{class:'hint'},'Observed gate: '+item.state));
+    rows.append(r);
+  }
+  p.append(rows);main.append(p);
+  main.append(el('p',{class:'note'},'Historical source inventory is stored separately in the private Library. This interface cannot enroll nodes, spend provider budgets, bypass MFA, or promote production readiness.'));
+}
+function render(){main.replaceChildren();const views={overview:renderOverview,federation:renderFederation,integrations:renderIntegrations,evidence:renderEvidence,security:renderSecurity,architecture:renderArchitecture};(views[view]||renderOverview)();$('current-view').textContent=view.charAt(0).toUpperCase()+view.slice(1);document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}
 async function signOut(){try{if(auth)await fetch(settings.url+'/auth/v1/logout',{method:'POST',headers:{apikey:settings.publishableKey,Authorization:`Bearer ${auth.token}`}});}catch{}auth=null;snapshot=null;pendingMfa=null;location.reload();}
 async function init(){document.querySelectorAll('#nav button').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.view;if(snapshot)render();}));$('refresh').addEventListener('click',refreshData);$('signout').addEventListener('click',signOut);$('login').addEventListener('submit',signIn);$('request-code').addEventListener('click',requestCode);$('verify-code').addEventListener('click',verifyCode);try{settings=await jsonReq('/api/config');}catch(e){setMessage('Configuration unavailable: '+e.message,true);$('login-password').disabled=true;}}
 init();

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {GATES,assessRelease} from '../src/release-gates.mjs';
+test('empty evidence fails closed',()=>{const a=assessRelease({});assert.equal(a.authorized_to_dispatch,false);assert.equal(a.verified_gate_reports,0);assert.equal(a.required_gate_reports,10)});
+test('local signature and mock tests cannot promote',()=>assert.throws(()=>assessRelease({owner_aal2:{verified:true,level:'LOCALLY_VERIFIED',receipt_sha256:'a'.repeat(64)}}),/UNSUPPORTED_PROOF_PROMOTION/));
+test('missing external receipt cannot promote',()=>assert.throws(()=>assessRelease({owner_aal2:{verified:true,level:'EXTERNALLY_VERIFIED',receipt_sha256:null}}),/UNSUPPORTED_PROOF_PROMOTION/));
+test('unsupported identities cannot produce arbitrary grant gates',()=>assert.throws(()=>assessRelease({unrestricted_access:{verified:true,level:'EXTERNALLY_VERIFIED',receipt_sha256:'a'.repeat(64)}}),/UNKNOWN_GATE/));
+test('reported external evidence still needs appraisal',()=>{const x=assessRelease({owner_aal2:{verified:true,level:'EXTERNALLY_VERIFIED',receipt_sha256:'a'.repeat(64)}});assert.equal(x.authorized_to_dispatch,false);assert.equal(x.needs_independent_appraisal,true)});
+test('all reported external evidence still cannot mint authorization',()=>{const e=Object.fromEntries(GATES.map(x=>[x,{verified:true,level:'EXTERNALLY_VERIFIED',receipt_sha256:'a'.repeat(64)}]));assert.equal(assessRelease(e).authorized_to_dispatch,false)});
