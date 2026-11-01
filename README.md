@@ -42,11 +42,12 @@ python scripts/verify_cross_runtime.py request .demo/trust.json .demo/request.js
 - `src/cli.mjs`: create keys/sign/verify/send.
 - `scripts/verify_cross_runtime.py`: Python independent Ed25519 verifier.
 - `scripts/analyze_telemetry.py`: read-only monitoring analysis without false statistical independence.
-- `test/`: executable positive/negative regression suite.
+- `scripts/demo_worker.mjs`: isolated subprocess node harness used by the three-process integration test.
+- `test/`: 17 executable tests, including a three-process signed exchange and replay rejection.
 - `migrations/001_sac_transport_v034.sql`: additive, service-only, RLS-protected, append-only staging evidence table.
 - `archive/v033/`: immutable copies of three supplied prior research artifacts.
 - `docs/EVIDENCE_GATES.md`: acceptance criteria and non-claims.
 
 ## Version history
 - v0.33 (archived): research audit and three expired pre-enrollment signature verifications.
-- v0.34.0 (2026-11-01): Node signed integrity probe + independent Python verifier + replay persistence + 16 automated tests + additive staging schema design.
+- v0.34.0 (2026-11-01): Node signed integrity probe + independent Python verifier + replay persistence + 17 automated tests, including three isolated local Node processes + additive staging schema design.
