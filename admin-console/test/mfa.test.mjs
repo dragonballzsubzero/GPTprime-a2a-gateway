@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createMfaClient} from '../mfa-client.mjs';
+const cfg={url:'https://example.supabase.co',publishableKey:'sb_publishable_testing'};
+const token='a'.repeat(70),id='9c077951-f439-4200-a649-6903d9349be8',challengeId='7811bb1f-1fea-48eb-90e9-87236c4881b1';
+function mock(fn){return async (...args)=>({ok:true,json:async()=>fn(...args)})}
+test('MFA accepts only trusted Supabase origin',()=>{assert.throws(()=>createMfaClient({...cfg,url:'https://evil.org'},token),/INVALID_AUTH_ORIGIN/)});
+test('MFA requires public key and session token',()=>{assert.throws(()=>createMfaClient({...cfg,publishableKey:'x'},token),/INVALID_PUBLIC_KEY/);assert.throws(()=>createMfaClient(cfg,'x'),/INVALID_AUTH_TOKEN/)});
+test('MFA factor status excludes unverified entries',async()=>{const c=createMfaClient(cfg,token,mock(()=>({factors:[{factor_type:'totp',status:'verified',id},{factor_type:'totp',status:'unverified',id:'x'},{factor_type:'sms',status:'verified',id:'x'}]})));assert.equal((await c.verifiedTotpFactors()).length,1)});
+test('MFA enrollment is scoped and contains only standard factor metadata',async()=>{let observed;const c=createMfaClient(cfg,token,mock((url,init)=>(observed={url,init}, {id,totp:{secret:'ABCDE',qr_code:'<svg />'}})));const factor=await c.enrollTotp();assert.equal(factor.id,id);assert.equal(observed.url,'https://example.supabase.co/auth/v1/factors');assert.deepEqual(JSON.parse(observed.init.body),{factor_type:'totp',friendly_name:'SAC Mainframe Admin'});assert.match(observed.init.headers.Authorization,/^Bearer /)});
+test('MFA refuses invalid TOTP code without any network request',async()=>{const c=createMfaClient(cfg,token,()=>{throw Error('unexpected network')});await assert.rejects(c.challengeAndVerify(id,'abc'),/INVALID_MFA_CHALLENGE/)});
+test('MFA challenges then verifies and returns new session',async()=>{const calls=[];const c=createMfaClient(cfg,token,mock((url,init)=>{calls.push({url,body:JSON.parse(init.body)});return calls.length===1?{id:challengeId}:{access_token:'new-session',refresh_token:'new-refresh',expires_in:3600}}));const result=await c.challengeAndVerify(id,'123456');assert.equal(result.access_token,'new-session');assert.deepEqual(calls[1].body,{challenge_id:challengeId,code:'123456'});assert.match(calls[1].url,/\/verify$/)});
+test('MFA errors do not echo secrets or private server output',async()=>{const c=createMfaClient(cfg,token,async()=>({ok:false,json:async()=>({error:'factor_not_found'})}));await assert.rejects(c.enrollTotp(),/factor_not_found/)});
