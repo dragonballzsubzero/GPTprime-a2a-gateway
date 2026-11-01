@@ -1,0 +1,9 @@
+.demo/
+keys/
+*.pem
+*.key
+.env
+node_modules/
+state/
+.DS_Store
+__pycache__/
