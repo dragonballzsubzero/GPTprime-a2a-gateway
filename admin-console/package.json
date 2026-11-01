@@ -1,1 +1,13 @@
-{"name":"sac-mainframe-admin-console","private":true,"version":"1.0.0","type":"module","engines":{"node":"22.x"},"scripts":{"test":"node --test test/*.test.mjs","check":"node --check app.js && node --check api/config.js && node --check api/overview.js && node --check api/ingest.js"}}
+{
+  "name": "sac-mainframe-admin-console",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check app.js && node --check api/config.js && node --check api/overview.js && node --check api/ingest.js && node --check mfa-client.mjs"
+  }
+}
