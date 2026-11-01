@@ -1,3 +1,16 @@
+# SAC Gateway — v0.36.0 candidate (hosting & replay hardening)
+
+This is an additive gateway compatibility release. **The operational API denies inference and dispatch** until real owner AAL2 commissioning, independent node enrollment, provider credentials, authenticated grants and a shared durable replay/lease backend are verified. A Vercel READY deployment does not establish live federation.
+
+- Local native `src/server.mjs` and existing `0.34` integrity tests are preserved.
+- `src/confidential-frame.mjs` implements candidate recipient encryption (X25519/HKDF-SHA256/AES-256-GCM) and Ed25519 signatures; decryption precedes the atomic replay claim and neither operation authorizes effects.
+- `api/health.js`, `api/ready.js`, `api/dispatch.js` are non-Express Vercel Functions. They return explicit readiness/commissioning denials; these are NOT A2A v1 interoperability endpoints.
+- `vercel.json` sets framework to null. The corresponding Vercel project framework preset must also be set to null; Node 22.x and SSO protection remain.
+- Test commands: `npm run check && npm test`. Every gateway repo must pass hosted GitHub CI before merge.
+- See `docs/VERCEL_HOSTING_RUNBOOK.md` and versioned changelog. Keep prior releases and private evidence archives untouched.
+
+---
+
 # SAC-A2A-TRANSPORT-1 v0.34.1 — executable integrity transport
 
 **Status:** locally tested Node+Python signed integrity probe; **not production, provider inference, A2A 1.0 wire compatibility, or BFT consensus**.

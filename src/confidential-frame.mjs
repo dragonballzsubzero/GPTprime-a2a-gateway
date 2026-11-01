@@ -75,14 +75,21 @@ export async function openFrame(e,{expected_recipient,expected_capability,expect
   fail(replay_store&&typeof replay_store.claim==='function','REPLAY_STORE_REQUIRED');
   const ephem=decode(e.ephemeral_spki,128),salt=decode(e.salt,16),iv=decode(e.iv,12),ct=decode(e.ciphertext,MAX),tag=decode(e.tag,16);
   fail(salt.length===16&&iv.length===12&&tag.length===16,'INVALID_CIPHER_FRAME');
-  // Replay reservation precedes any release of plaintext and must be durable in production.
-  await replay_store.claim(e.sender,e.nonce,digest(header(e)));
+  // Authenticate ciphertext BEFORE allocating a durable replay slot.
+  // A validly signed but AEAD-invalid frame must not consume the original nonce.
+  // Durable atomic claim still happens BEFORE any plaintext is returned.
   const shared=diffieHellman({privateKey:createPrivateKey(recipient_enc_private_pem),publicKey:createPublicKey({key:ephem,format:'der',type:'spki'})});
   const symmetric=key(shared,salt,e.recipient);
+  let plaintext;
   try{
     const decipher=createDecipheriv('aes-256-gcm',symmetric,iv);
     decipher.setAAD(aad(e));decipher.setAuthTag(tag);
-    const plaintext=Buffer.concat([decipher.update(ct),decipher.final()]);
+    plaintext=Buffer.concat([decipher.update(ct),decipher.final()]);
+    await replay_store.claim(e.sender,e.nonce,digest(header(e)));
     return {plaintext,sender:e.sender,recipient:e.recipient,capability:e.capability,job_id:e.job_id,wire_sha256:digest(header(e)),effect_authorized:false,provider_execution_verified:false};
+  }catch(err){
+    // Clear locally authenticated plaintext if persistence/claim fails.
+    if(plaintext)plaintext.fill(0);
+    throw err;
   }finally{symmetric.fill(0);shared.fill(0);}
 }

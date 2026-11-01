@@ -1,16 +1,16 @@
 {
   "name": "sac-a2a-transport-v034",
-  "version": "0.35.0-candidate",
+  "version": "0.36.0-candidate",
   "private": true,
   "type": "module",
-  "description": "SAC signed integrity probe with candidate confidential-frame and evidence guards; external provider execution unverified",
+  "description": "SAC candidate recipient-encrypted frame and Vercel serverless gateway readiness; no AI inference enabled",
   "engines": {
     "node": ">=22.16.0 <23"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "start": "node src/server.mjs",
-    "check": "node --check src/transport.mjs && node --check src/server.mjs && node --check src/cli.mjs && node --check src/confidential-frame.mjs && node --check src/release-gates.mjs"
+    "check": "node --check src/transport.mjs && node --check src/server.mjs && node --check src/cli.mjs && node --check src/confidential-frame.mjs && node --check src/release-gates.mjs && node --check api/health.js && node --check api/ready.js && node --check api/dispatch.js"
   },
   "license": "UNLICENSED"
 }
