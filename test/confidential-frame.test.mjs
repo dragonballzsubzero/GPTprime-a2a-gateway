@@ -1,0 +1,20 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {generateFrameKeys,sealFrame,openFrame} from '../src/confidential-frame.mjs';
+const alice=generateFrameKeys(),bob=generateFrameKeys(),carol=generateFrameKeys();
+const policy='b'.repeat(64);
+class Ledger{seen=new Set();async claim(sender,nonce){const id=sender+':'+nonce;if(this.seen.has(id))throw new Error('REPLAY_DETECTED');this.seen.add(id)}}
+const make=()=>sealFrame({sender:'alice.node',recipient:'bob.node',capability:'research.review',policy_sha256:policy,plaintext:Buffer.from('secret 123'),sender_sign_private_pem:alice.sign_private_pem,recipient_enc_public_pem:bob.enc_public_pem,now:10_000,ttl_ms:30_000});
+const getOpts=ledger=>({expected_recipient:'bob.node',expected_capability:'research.review',expected_policy_sha256:policy,sender_sign_public_pem:alice.sign_public_pem,recipient_enc_private_pem:bob.enc_private_pem,replay_store:ledger,now:11_000});
+test('correct recipient decrypts signed ciphertext',async()=>{const frame=make();assert(!JSON.stringify(frame).includes('secret 123'));const e=await openFrame(frame,getOpts(new Ledger()));assert.equal(e.plaintext.toString(),'secret 123');assert.equal(e.effect_authorized,false)});
+test('wrong signing key fails',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),sender_sign_public_pem:carol.sign_public_pem}),/BAD_SENDER_SIGNATURE/)});
+test('wrong recipient fails before decryption',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),expected_recipient:'carol.node'}),/RECIPIENT_MISMATCH/)});
+test('wrong capability is denied',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),expected_capability:'tool.execute'}),/CAPABILITY_MISMATCH/)});
+test('wrong policy version is denied',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),expected_policy_sha256:'a'.repeat(64)}),/POLICY_MISMATCH/)});
+test('expired message fails',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),now:150_000}),/EXPIRED_OR_FUTURE/)});
+test('tampered ciphertext fails signature before plaintext release',async()=>{const frame=make();frame.ciphertext=frame.ciphertext.slice(0,-1)+(frame.ciphertext.endsWith('A')?'B':'A');await assert.rejects(openFrame(frame,getOpts(new Ledger())),/BAD_SENDER_SIGNATURE/)});
+test('wrong recipient private key fails AEAD',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),recipient_enc_private_pem:carol.enc_private_pem}))});
+test('replay rejected on second open',async()=>{const l=new Ledger(),frame=make();await openFrame(frame,getOpts(l));await assert.rejects(openFrame(frame,getOpts(l)),/REPLAY_DETECTED/)});
+test('absence of replay store fails',async()=>{await assert.rejects(openFrame(make(),{...getOpts(new Ledger()),replay_store:null}),/REPLAY_STORE_REQUIRED/)});
+test('oversized payload rejected',()=>assert.throws(()=>sealFrame({sender:'alice.node',recipient:'bob.node',capability:'research.review',policy_sha256:policy,plaintext:Buffer.alloc(32001),sender_sign_private_pem:alice.sign_private_pem,recipient_enc_public_pem:bob.enc_public_pem,now:10_000}),/PAYLOAD_TOO_LARGE/));
+test('unknown frame property rejected',async()=>{const x=make();x.superuser=true;await assert.rejects(openFrame(x,getOpts(new Ledger())),/INVALID_FIELDS/)});
+test('a sealed frame cannot claim an executed external action',async()=>{const r=await openFrame(make(),getOpts(new Ledger()));assert.equal(r.provider_execution_verified,false)});
