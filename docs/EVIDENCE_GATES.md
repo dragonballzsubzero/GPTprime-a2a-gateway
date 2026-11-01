@@ -1,7 +1,7 @@
 # SAC v0.34 evidence gates
 
 ## Current release (verified locally)
-- Node 22.16.0, Python 3.13.5; `npm test` passes local integrity-probe regression suite.
+- Node 22.16.0, Python 3.13.5; `npm test` passes 17 local integrity-probe regression tests, including a three-process cross-node round trip.
 - Signed request, trust-store verification, canonical transport envelope, strict field set and times, exact payload digest, disk-backed atomic nonce claim, signed receipt, persisted receipt.
 - Python validates Node-generated Ed25519 signatures independently.
 - Historical v0.33 audit files are copied unchanged into `archive/v033`.
