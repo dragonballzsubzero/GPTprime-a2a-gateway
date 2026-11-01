@@ -1,9 +1,9 @@
 // Public Europe PMC metadata normalization for SAC Console v1.2.
 // This module never retrieves abstracts/full text and never treats a match as a verified finding.
 export const TOPICS = Object.freeze({
-  mitochondrial_allotopy: 'TITLE_ABS:("allotopic expression" AND mitochondri*)',
-  mitochondrial_import: 'TITLE_ABS:("mitochondrial protein import" AND (ATP6 OR ATP8 OR hydrophobic))',
-  endovascular_bci: 'TITLE_ABS:("endovascular" AND ("brain computer interface" OR stentrode))'
+  mitochondrial_allotopy: '"allotopic expression" AND ATP8',
+  mitochondrial_import: '"mitochondrial protein import" AND ATP6',
+  endovascular_bci: 'endovascular AND Stentrode'
 });
 export const MAX_RESULTS = 4;
 const acceptedSources = new Set(['MED','PMC','PPR']);
