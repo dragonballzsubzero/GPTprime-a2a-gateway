@@ -1,4 +1,4 @@
-# SAC-A2A-TRANSPORT-1 v0.34.0 — executable integrity transport
+# SAC-A2A-TRANSPORT-1 v0.34.1 — executable integrity transport
 
 **Status:** locally tested Node+Python signed integrity probe; **not production, provider inference, A2A 1.0 wire compatibility, or BFT consensus**.
 
@@ -43,11 +43,13 @@ python scripts/verify_cross_runtime.py request .demo/trust.json .demo/request.js
 - `scripts/verify_cross_runtime.py`: Python independent Ed25519 verifier.
 - `scripts/analyze_telemetry.py`: read-only monitoring analysis without false statistical independence.
 - `scripts/demo_worker.mjs`: isolated subprocess node harness used by the three-process integration test.
-- `test/`: 17 executable tests, including a three-process signed exchange and replay rejection.
+- `src/evidence.mjs`: independent scientific metadata gate that cannot auto-promote biological or neural claims.
+- `test/`: 23 executable tests, including three-process exchange and biology/BCI claim-gating regressions.
 - `migrations/001_sac_transport_v034.sql`: additive, service-only, RLS-protected, append-only staging evidence table.
 - `archive/v033/`: immutable copies of three supplied prior research artifacts.
 - `docs/EVIDENCE_GATES.md`: acceptance criteria and non-claims.
+- `docs/SCIENTIFIC_EVIDENCE_CONTRACT.md`: structured mitochondrial and neural research provenance gates.
 
 ## Version history
 - v0.33 (archived): research audit and three expired pre-enrollment signature verifications.
-- v0.34.0 (2026-11-01): Node signed integrity probe + independent Python verifier + replay persistence + 17 automated tests, including three isolated local Node processes + additive staging schema design.
+- v0.34.0 (2026-11-01): Node signed integrity probe + independent Python verifier + replay persistence + 23 automated tests, including three isolated local Node processes and scientific evidence gates + additive staging schema design.
