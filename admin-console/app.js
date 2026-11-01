@@ -1,5 +1,6 @@
+import {createMfaClient} from './mfa-client.mjs';
 // SAC Admin Console v1 — no persisted credentials, no external JS dependencies.
-let settings=null, auth=null, snapshot=null, view='overview',busy=false;
+let settings=null, auth=null, snapshot=null, view='overview',busy=false, pendingMfa=null;
 const $=id=>document.getElementById(id);
 const main=$('main');
 const safeText=x=>x===null||x===undefined?'unknown':String(x);
@@ -45,8 +46,52 @@ const form=panel('Submit a research source');form.classList.add('form-fields');c
 const record=el('select',{id:'recordtype'});for(const k of ['paper','technical_reference','provider_status','operational_observation','research_note'])record.append(el('option',{value:k},k.replaceAll('_',' ')));form.append(record);
 append(form,el('label',{for:'sourceurl'},'Public source URL (HTTPS)'),el('input',{id:'sourceurl',type:'url',placeholder:'https://doi.org/...'}),el('label',{for:'evidencejson'},'JSON metadata payload'),el('textarea',{id:'evidencejson',placeholder:'{"title":"Source paper", "doi":"10...", "finding":"..."}'}));
 const btn=el('button',{class:'primary',type:'button',id:'submit-evidence'},'Submit to quarantine');btn.disabled=snapshot.privilege?.aal!=='aal2';form.append(btn,el('p',{class:'hint',id:'evidence-message'},btn.disabled?'MFA AAL2 not active: evidence writes are disabled. Configure a verified MFA factor for this Supabase Auth user.':'All records remain unverified until independently reviewed.'));main.append(form);btn.addEventListener('click',async()=>{btn.disabled=true;const msg=$('evidence-message');try{const payload=JSON.parse($('evidencejson').value),token=await ensureToken(),req={connector_id:$('connector').value,record_type:$('recordtype').value,source_url:$('sourceurl').value.trim()||null,observed_at:new Date().toISOString(),payload};const data=await jsonReq('/api/ingest',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(req)});msg.textContent=`Quarantined evidence ${data.evidence_id}. Digest: ${data.payload_sha256}`;await refreshData();}catch(err){msg.textContent='Evidence rejected: '+err.message}finally{btn.disabled=snapshot?.privilege?.aal!=='aal2';}});}
-function renderSecurity(){main.append(intro('ACCESS GOVERNANCE','Security & controls','The interface uses an existing Supabase Auth user with a service-side founder allowlist, not user-editable profile metadata.'));const p=panel('Current session');p.append(kv('Role',snapshot.privilege?.role||'unknown'),kv('Authenticator assurance',snapshot.privilege?.aal||'unknown'),kv('Application mode','Read-only control-plane observability'),kv('MFA-gated ingestion',snapshot.privilege?.aal==='aal2'?'Eligible':'Blocked until AAL2'),kv('Password handling','Sent only to Supabase Auth'),kv('Session storage','In-memory only; re-authenticate on reload'),kv('Original SAC tables','Unmodified by this dashboard'));main.append(p);main.append(el('p',{class:'note'},'No platform connector credentials are copied into the web app. Deployments are protected independently by Vercel Authentication. Source records in quarantine require independent verification.'));}
+function renderSecurity(){main.append(intro('ACCESS GOVERNANCE','Security & controls','The interface uses an existing Supabase Auth user with a service-side founder allowlist. Configure and verify an authenticator factor to authorize evidence uploads.'));
+const p=panel('Current session');p.append(kv('Role',snapshot.privilege?.role||'unknown'),kv('Authenticator assurance',snapshot.privilege?.aal||'unknown'),kv('Application mode','Read-only until AAL2 is verified'),kv('MFA-gated ingestion',snapshot.privilege?.aal==='aal2'?'Eligible':'Blocked until AAL2'),kv('Password handling','Sent only to Supabase Auth'),kv('Session storage','In-memory only; re-authenticate on reload'),kv('Original SAC tables','Unmodified by this dashboard'));main.append(p);
+const enrollPanel=panel('Authenticator app (TOTP) — setup or verify');
+const factorArea=el('div',{id:'factor-area'},'Retrieving account MFA factors…');enrollPanel.append(factorArea);main.append(enrollPanel);
+main.append(el('p',{class:'note'},'The QR and backup secret are displayed only for the current enrollment. Store recovery details in your authenticator manager, not in a Git repository. Every privileged write is independently checked by Supabase Auth and the server-side MFA gate.'));
+showMfaControls(factorArea);
+}
+async function showMfaControls(slot){
+ try{
+   const token=await ensureToken();const client=createMfaClient(settings,token);const factors=await client.verifiedTotpFactors();
+   if(!slot.isConnected)return;
+   slot.replaceChildren();
+   if(snapshot?.privilege?.aal==='aal2'){slot.append(el('p',{class:'success'},'Second factor verified for this session.'));return;}
+   if(!factors.length&&!pendingMfa){
+     slot.append(el('p',{class:'hint'},'No verified authenticator was found. Enroll an authenticator app for this account.'));
+     const begin=el('button',{type:'button',class:'primary'},'Enroll TOTP authenticator');slot.append(begin);
+     begin.addEventListener('click',async()=>{begin.disabled=true;try{const activeToken=await ensureToken();pendingMfa=await createMfaClient(settings,activeToken).enrollTotp();showPendingFactor(slot);}catch(e){slot.append(el('p',{class:'error'},'Enrollment failed: '+e.message));begin.disabled=false;}});
+     return;
+   }
+   if(pendingMfa){showPendingFactor(slot);return;}
+   slot.append(el('p',{class:'hint'},'Your authenticator factor is registered. Enter the current six-digit code to unlock MFA-gated research ingestion.'));
+   showMfaVerification(slot,factors[0].id);
+ }catch(e){if(slot.isConnected)slot.replaceChildren(el('p',{class:'error'},'MFA status unavailable: '+e.message));}
+}
+function showPendingFactor(slot){
+ if(!pendingMfa)return;slot.replaceChildren(el('p',{class:'hint'},'Scan the enrollment QR with your authenticator or manually enter the secret below. Then verify the current six-digit code.'));
+ const qr=pendingMfa.qrCode;
+ if(typeof qr==='string'&&qr.startsWith('<svg')&&qr.length<20000){
+   const image=el('img',{alt:'Temporary TOTP enrollment QR code'});image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(qr);image.width=190;image.height=190;image.style.background='#fff';image.style.padding='9px';slot.append(image);
+ }
+ slot.append(el('p',{class:'hint'},'Manual enrollment secret — visible only until navigation or refresh:'));
+ const secret=el('code',{},pendingMfa.secret);secret.className='mfa-secret';slot.append(secret);
+ showMfaVerification(slot,pendingMfa.id);
+}
+function showMfaVerification(slot,factorId){
+ const wrapper=el('div',{class:'mfa-actions'});
+ const code=el('input',{type:'text',maxlength:'6',inputmode:'numeric',autocomplete:'one-time-code','aria-label':'Six-digit authenticator code',placeholder:'6-digit code'});
+ const btn=el('button',{type:'button',class:'primary'},'Verify authenticator');const status=el('p',{class:'hint','role':'status'},'');
+ wrapper.append(code,btn,status);slot.append(wrapper);
+ btn.addEventListener('click',async()=>{btn.disabled=true;status.textContent='Verifying second factor…';try{
+   const token=await ensureToken();const result=await createMfaClient(settings,token).challengeAndVerify(factorId,code.value.trim());
+   acceptSession(result);pendingMfa=null;code.value='';status.textContent='Authenticator verified.';await refreshData();
+ }catch(e){status.textContent='MFA verification failed: '+e.message;}finally{btn.disabled=false;}});
+}
+
 function render(){main.replaceChildren();const views={overview:renderOverview,federation:renderFederation,integrations:renderIntegrations,evidence:renderEvidence,security:renderSecurity};(views[view]||renderOverview)();$('current-view').textContent=view.charAt(0).toUpperCase()+view.slice(1);document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}
-async function signOut(){try{if(auth)await fetch(settings.url+'/auth/v1/logout',{method:'POST',headers:{apikey:settings.publishableKey,Authorization:`Bearer ${auth.token}`}});}catch{}auth=null;snapshot=null;location.reload();}
+async function signOut(){try{if(auth)await fetch(settings.url+'/auth/v1/logout',{method:'POST',headers:{apikey:settings.publishableKey,Authorization:`Bearer ${auth.token}`}});}catch{}auth=null;snapshot=null;pendingMfa=null;location.reload();}
 async function init(){document.querySelectorAll('#nav button').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.view;if(snapshot)render();}));$('refresh').addEventListener('click',refreshData);$('signout').addEventListener('click',signOut);$('login').addEventListener('submit',signIn);$('request-code').addEventListener('click',requestCode);$('verify-code').addEventListener('click',verifyCode);try{settings=await jsonReq('/api/config');}catch(e){setMessage('Configuration unavailable: '+e.message,true);$('login-password').disabled=true;}}
 init();
