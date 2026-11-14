@@ -87,8 +87,27 @@ async function main(req:Request):Promise<Response> {
       key_enrollment:"ADMIN_OUT_OF_BAND",production_qualified:false});
   }
   if(req.method!=="POST" || !["propose","execute"].includes(path||""))return reply(404,{error:"NOT_FOUND"});
-  const raw=await req.text();
-  if(raw.length>MAX_BODY)return reply(413,{error:"REQUEST_TOO_LARGE"});
+  const contentType=(req.headers.get("content-type")||"").split(";")[0].trim().toLowerCase();
+  if(contentType!=="application/json")return reply(415,{error:"JSON_CONTENT_TYPE_REQUIRED"});
+  const lengthText=req.headers.get("content-length");
+  if(lengthText && Number(lengthText)>MAX_BODY)return reply(413,{error:"REQUEST_TOO_LARGE"});
+  if(!req.body)return reply(400,{error:"EMPTY_BODY"});
+  const reader=req.body.getReader();
+  const chunks:Uint8Array[]=[];
+  let total=0;
+  while(true){
+    const part=await reader.read();
+    if(part.done)break;
+    total+=part.value.byteLength;
+    if(total>MAX_BODY){await reader.cancel();return reply(413,{error:"REQUEST_TOO_LARGE"});}
+    chunks.push(part.value);
+  }
+  const data=new Uint8Array(total);
+  let offset=0;
+  for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.byteLength;}
+  let raw="";
+  try {raw=new TextDecoder("utf-8",{fatal:true}).decode(data);}
+  catch {return reply(400,{error:"INVALID_UTF8"});}
   let body:unknown;
   try {body=JSON.parse(raw);} catch {return reply(400,{error:"INVALID_JSON"});}
   if(!isObj(body)||!isObj(body.action)||!validateAction(body.action))
