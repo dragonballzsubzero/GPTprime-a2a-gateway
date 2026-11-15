@@ -17,8 +17,8 @@ The protocol never treats matching hashes, a local test, an audit log entry or a
 - `core.mjs`, `http.mjs`: authenticated, strictly shaped proposal and execution handling; compact JSON rejects duplicate-member ambiguity.
 - `adapters.mjs`: Supabase Auth / existing v0.3 key and proposal RPC adapters plus a **v0.4-only** execution RPC adapter; HTTPS audit client. No fallback to the old execution RPC.
 - `owner-approve.mjs`, `proposal-client.mjs`: independent owner signing on a trusted terminal and host-controlled node signing.
-- `audit-ledger.mjs`, `audit-http.mjs`, `audit-main.mjs`: a separate single-writer, fsync-backed, signed, idempotent local audit process; a loopback HTTP service for a separately configured TLS boundary. The log is not immutable storage and lacks an externally anchored head.
-- `reconcile.mjs`: verifies audit acknowledgments and a distinct signed observer statement against trusted keys supplied in a separate owner-controlled configuration file. A valid signature establishes an attestation, not the source's factual independence.
+- `audit-ledger.mjs`, `audit-http.mjs`, `audit-main.mjs`: a separate single-writer, fsync-backed, signed, idempotent local audit process; a loopback HTTP service for a separately configured TLS boundary. Each record also signs its sequence, predecessor and acknowledgement hash, preventing undetected deletion or reordering of interior records. The log is not immutable storage and lacks an externally anchored head, so suffix truncation is not independently detectable.
+- `reconcile.mjs`: verifies audit acknowledgments and a distinct v2 signed observer statement against trusted keys supplied in a separate owner-controlled configuration file. The statement binds owner, proposal and signed-grant hash in addition to action and effect. A valid signature establishes an attestation, not the source's factual independence.
 - `sql/execute-canary.candidate.sql`: transaction proposal only. It is not a Supabase migration and has not been applied or validated against PostgreSQL. It grants no runtime role. Use the current Supabase CLI to create and review a real migration before any database change.
 - `worker/`: candidate rootless, offline, resource-limited triage wrapper with pinned image and explicit seccomp profile requirements. The wrapper has only been tested with a mocked Docker CLI; the actual runtime and isolation boundary have not been validated. The underlying v0.3 scanner remains advisory and does not render or sanitize documents.
 
@@ -31,6 +31,10 @@ node --test test/broker-v04*.test.mjs
 ```
 
 The tests use generated throwaway keys, synthetic auth and database fixtures, and a separately spawned **local** audit process. The replay concurrency test exercises a fixture store, not multiple PostgreSQL replicas. No external user, provider, owner signing key, live model or production system is invoked.
+
+`.github/workflows/broker-v04-qualification.yml` additionally runs the actual candidate SQL against a disposable PostgreSQL service using a simplified synthetic trust gate, and tests container restrictions on the CI Docker daemon. Consult that workflow's job logs for results; neither test proves production infrastructure qualification.
+
+**Wire and ledger compatibility:** the reconciler now requires `sac.effect-observation.v2` and its v2 signature domain, including `owner_id`, `proposal_id`, and `grant_sha256`; it rejects the weaker v1 observation. Newly written audit records include `chain_signature_b64url`. Old ledgers without it fail closed and must be retained separately for review; no automatic rewriting or migration is provided.
 
 ## Endpoint contracts
 

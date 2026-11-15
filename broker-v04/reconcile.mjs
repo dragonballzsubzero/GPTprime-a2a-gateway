@@ -4,8 +4,8 @@ import {validEvent} from './audit-ledger.mjs';
 import {eventDigest,sha256,verifyAuditAck,verifyEd25519} from './core.mjs';
 import {readPrivateFile} from './secrets.mjs';
 
-const OBS_DOMAIN='sac.effect-observation.v1\n';
-const FIELDS=['schema','observer_id','source','execution_id','action_digest','effect_sha256',
+const OBS_DOMAIN='sac.effect-observation.v2\n';
+const FIELDS=['schema','observer_id','source','owner_id','proposal_id','grant_sha256','execution_id','action_digest','effect_sha256',
               'audience','environment','observed_at','status'];
 function exact(x,keys){return x&&typeof x==='object'&&!Array.isArray(x)&&Object.getPrototypeOf(x)===Object.prototype&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
 
@@ -18,9 +18,11 @@ export function reconcile({intent,intent_ack,result,result_ack,observation,obser
   if(!verifyAuditAck(intent,intent_ack,trustedAudit)||!verifyAuditAck(result,result_ack,trustedAudit))throw Error('AUDIT_ACK_INVALID');
   if(!trustedObserver||!trustedObserver.public_jwk||trustedObserver.public_jwk.x===trustedAudit.public_jwk.x)
     throw Error('OBSERVER_KEY_NOT_DISTINCT');
-  if(!exact(observation,FIELDS)||observation.schema!=='sac.effect-observation.v1'||
+  if(!exact(observation,FIELDS)||observation.schema!=='sac.effect-observation.v2'||
      observation.observer_id!==trustedObserver.id||!Array.isArray(trustedObserver.allowed_sources)||
      !trustedObserver.allowed_sources.includes(observation.source)||observation.status!=='present'||
+     observation.owner_id!==result.owner_id||observation.proposal_id!==result.proposal_id||
+     observation.grant_sha256!==result.grant_sha256||
      observation.execution_id!==result.execution_id||observation.action_digest!==result.action_digest||
      observation.effect_sha256!==result.effect_sha256||observation.audience!==result.audience||
      observation.environment!==result.environment||!Number.isSafeInteger(observation.observed_at)||

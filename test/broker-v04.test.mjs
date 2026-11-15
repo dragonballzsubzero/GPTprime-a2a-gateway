@@ -5,7 +5,7 @@ import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {canonical,digest} from '../broker-v03/client.mjs';
-import {createBroker,verifyAuditAck,eventDigest,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
+import {createBroker,verifyAuditAck,eventDigest,sha256,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
 import {createBrokerHttpServer} from '../broker-v04/http.mjs';
 import {openAuditLedger} from '../broker-v04/audit-ledger.mjs';
 import {reconcile} from '../broker-v04/reconcile.mjs';
@@ -182,6 +182,23 @@ test('real local ledger signs, fsyncs, deduplicates, restarts and detects tamper
     await assert.rejects(openAuditLedger({directory:dir,sinkId:'independent-audit',privatePem:pem}));
   }finally{await rm(dir,{recursive:true,force:true});}
 });
+test('ledger rejects removal of an interior signed event even if chain hashes are rebuilt',async()=>{
+  const f=fixture(),dir=await mkdtemp(path.join(tmpdir(),'broker-v04-ledger-order-'));
+  const pem=f.auditor.privateKey.export({type:'pkcs8',format:'pem'}).toString();
+  try{
+    const ledger=await openAuditLedger({directory:dir,sinkId:'independent-audit',privatePem:pem,clock:()=>N});
+    const event={schema:'sac.audit.event.v1',type:'intent',owner_id:ownerId,node:f.action.node,run:f.action.run,
+      proposal_id:proposalId,action_digest:digest(f.action),grant_sha256:'a'.repeat(64),nonce:'1'.repeat(32),audience,environment};
+    for(const n of ['1','2','3'])await ledger.append({...event,nonce:n.repeat(32)});
+    await ledger.close();
+    const file=path.join(dir,'audit.jsonl');
+    const records=(await readFile(file,'utf8')).trim().split('\n').map(JSON.parse);
+    const first=canonical(records[0]);
+    records[2].seq=2;records[2].prev_sha256=sha256(first);
+    await writeFile(file,first+'\n'+canonical(records[2])+'\n');
+    await assert.rejects(openAuditLedger({directory:dir,sinkId:'independent-audit',privatePem:pem}),/AUDIT_CHAIN_SIGNATURE_INVALID/);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
 test('HTTP adapter rejects duplicate JSON keys and missing authentication',async()=>{
   const f=fixture(),server=createBrokerHttpServer(createBroker(f.deps));
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -198,15 +215,23 @@ test('HTTP adapter rejects duplicate JSON keys and missing authentication',async
 test('independently signed observation is needed to reconcile a logged effect',async()=>{
   const f=fixture();await createBroker(f.deps).execute(bearer,f.request);
   const observer=generateKeyPairSync('ed25519');
-  const observation={schema:'sac.effect-observation.v1',observer_id:'observer-1',source:'readonly-db',
+  const observation={schema:'sac.effect-observation.v2',observer_id:'observer-1',source:'readonly-db',
+    owner_id:ownerId,proposal_id:proposalId,grant_sha256:f.calls.events[1].grant_sha256,
     execution_id:executionId,action_digest:digest(f.action),effect_sha256:'a'.repeat(64),audience,environment,
     observed_at:N+2,status:'present'};
   const params={intent:f.calls.events[0],intent_ack:f.calls.acks[0],result:f.calls.events[1],result_ack:f.calls.acks[1],
-    observation,observation_signature:signBody(observer,'sac.effect-observation.v1\n',observation),
+    observation,observation_signature:signBody(observer,'sac.effect-observation.v2\n',observation),
     trustedAudit:f.deps.trustedAudit,trustedObserver:{id:'observer-1',public_jwk:jwk(observer),allowed_sources:['readonly-db']},now:N+3};
   assert.equal(reconcile(params).status,'RECONCILED_SIGNED_OBSERVATION');
   assert.throws(()=>reconcile({...params,observation:{...observation,effect_sha256:'f'.repeat(64)}}),/OBSERVATION_BINDING_INVALID/);
   assert.throws(()=>reconcile({...params,observation_signature:'bad'}),/OBSERVER_SIGNATURE_INVALID/);
   assert.throws(()=>reconcile({...params,trustedObserver:{...params.trustedObserver,public_jwk:jwk(f.auditor)}}),/OBSERVER_KEY_NOT_DISTINCT/);
   assert.throws(()=>reconcile({...params,trustedObserver:{...params.trustedObserver,allowed_sources:['other']}}),/OBSERVATION_BINDING_INVALID/);
+  // A different grant can produce the same action/effect digest. Reusing an
+  // observed execution ID must not reconcile that other grant.
+  const otherIntent={...params.intent,grant_sha256:'e'.repeat(64),nonce:'2'.repeat(32)};
+  const otherResult={...params.result,grant_sha256:otherIntent.grant_sha256,nonce:otherIntent.nonce};
+  const otherIntentAck=await f.deps.audit.append(otherIntent),otherResultAck=await f.deps.audit.append(otherResult);
+  assert.throws(()=>reconcile({...params,intent:otherIntent,intent_ack:otherIntentAck,
+    result:otherResult,result_ack:otherResultAck}),/OBSERVATION_BINDING_INVALID/);
 });

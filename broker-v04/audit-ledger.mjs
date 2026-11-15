@@ -10,10 +10,16 @@ const ZERO='0'.repeat(64), HEX=/^[0-9a-f]{64}$/, HEX32=/^[0-9a-f]{32}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[A-Za-z0-9_.:-]{1,100}$/;
 const ACK_DOMAIN='sac.audit.ack.v1\n';
+const CHAIN_DOMAIN='sac.audit.chain.v1\n';
 const BASE=['schema','type','owner_id','node','run','proposal_id','action_digest','grant_sha256','nonce','audience','environment'];
 function exact(x,keys){return x && typeof x==='object'&&!Array.isArray(x)&&Object.getPrototypeOf(x)===Object.prototype&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
 function matchingIntent(result){
   const out={};for(const key of BASE)out[key]=key==='type'?'intent':result[key];return out;
+}
+function chainPayload(record,sinkId){
+  return {schema:'sac.audit.chain.v1',sink_id:sinkId,seq:record.seq,prev_sha256:record.prev_sha256,
+    event_sha256:eventDigest(record.event),
+    ack_sha256:sha256(canonical({ack:record.ack,signature_b64url:record.signature_b64url}))};
 }
 export function validEvent(e){
   const keys=e?.type==='intent'?BASE:e?.type==='result'?[...BASE,'execution_id','effect_sha256']:[];
@@ -25,7 +31,7 @@ export function validEvent(e){
     && (e.type==='intent'||(UUID.test(e.execution_id) && HEX.test(e.effect_sha256)));
 }
 function verifyStored(record,seq,prev,publicKey,sinkId){
-  if(!exact(record,['seq','prev_sha256','event','ack','signature_b64url']) || record.seq!==seq
+  if(!exact(record,['seq','prev_sha256','event','ack','signature_b64url','chain_signature_b64url']) || record.seq!==seq
      || record.prev_sha256!==prev || !validEvent(record.event))throw new Error('AUDIT_LEDGER_INVALID');
   const a=record.ack;
   if(!exact(a,['schema','sink_id','event_sha256','event_type','accepted_at']) ||
@@ -36,6 +42,12 @@ function verifyStored(record,seq,prev,publicKey,sinkId){
   const b=Buffer.from(s,'base64url');
   if(b.length!==64||b.toString('base64url')!==s||!verify(null,Buffer.from(ACK_DOMAIN+canonical(a)),publicKey,b))
     throw new Error('AUDIT_SIGNATURE_INVALID');
+  const cs=record.chain_signature_b64url;
+  if(typeof cs!=='string'||!/^[A-Za-z0-9_-]{86}$/.test(cs))throw new Error('AUDIT_CHAIN_SIGNATURE_INVALID');
+  const cb=Buffer.from(cs,'base64url');
+  if(cb.length!==64||cb.toString('base64url')!==cs||
+     !verify(null,Buffer.from(CHAIN_DOMAIN+canonical(chainPayload(record,sinkId))),publicKey,cb))
+    throw new Error('AUDIT_CHAIN_SIGNATURE_INVALID');
 }
 
 /** Independent single-writer process; a stale lock requires operator recovery. */
@@ -81,6 +93,7 @@ export async function openAuditLedger({directory,sinkId,privatePem,clock=()=>Mat
         if(!Number.isSafeInteger(ack.accepted_at))throw new Error('AUDIT_TIME_INVALID');
         const signature=sign(null,Buffer.from(ACK_DOMAIN+canonical(ack)),privateKey).toString('base64url');
         const record={seq:seq+1,prev_sha256:previous,event,ack,signature_b64url:signature};
+        record.chain_signature_b64url=sign(null,Buffer.from(CHAIN_DOMAIN+canonical(chainPayload(record,sinkId))),privateKey).toString('base64url');
         const line=canonical(record);
         const stat=await file.stat();
         if(stat.size+Buffer.byteLength(line)+1>MAX_LOG)throw new Error('AUDIT_LOG_FULL');
