@@ -4,6 +4,8 @@
 -- It does not provision a replacement admission boundary or credentials.
 
 begin;
+set local lock_timeout='5s';
+set local statement_timeout='20s';
 
 -- Serialize the emptiness check with inserts and key activation. Once the
 -- transaction commits, new v0.3 effects through service_role are denied.
