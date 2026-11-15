@@ -5,7 +5,8 @@ import {createPrivateKey,createPublicKey,sign,verify} from 'node:crypto';
 import {canonical} from '../broker-v03/client.mjs';
 import {sha256,eventDigest,verifyAuditHead} from './core.mjs';
 
-const MAX_LOG=64*1024*1024;
+export const AUDIT_MAX_LOG_BYTES=64*1024*1024;
+const MAX_LOG=AUDIT_MAX_LOG_BYTES;
 const ZERO='0'.repeat(64), HEX=/^[0-9a-f]{64}$/, HEX32=/^[0-9a-f]{32}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[A-Za-z0-9_.:-]{1,100}$/;
@@ -49,6 +50,34 @@ function verifyStored(record,seq,prev,publicKey,sinkId){
   if(cb.length!==64||cb.toString('base64url')!==cs||
      !verify(null,Buffer.from(CHAIN_DOMAIN+canonical(chainPayload(record,sinkId))),publicKey,cb))
     throw new Error('AUDIT_CHAIN_SIGNATURE_INVALID');
+}
+
+/** Verify a complete signed ledger snapshot, optionally against a prior head. */
+export function verifyAuditSnapshot({lines,head,trusted,prior=null}){
+  if(typeof lines!=='string'||Buffer.byteLength(lines)>MAX_LOG||
+     (lines!==''&&!lines.endsWith('\n'))||!verifyAuditHead(head,trusted)||
+     (prior!==null&&!verifyAuditHead(prior,trusted)))throw new Error('AUDIT_SNAPSHOT_INVALID');
+  if(prior!==null && prior.head.seq>head.head.seq)throw new Error('AUDIT_SNAPSHOT_ROLLBACK');
+  const publicKey=createPublicKey({key:trusted.public_jwk,format:'jwk'});
+  let seq=0,previous=ZERO;
+  let priorMatched=prior===null||(prior.head.seq===0&&prior.head.head_sha256===ZERO);
+  const entries=new Set();
+  const records=lines===''?[]:lines.slice(0,-1).split('\n');
+  for(const line of records){
+    if(line==='')throw new Error('AUDIT_LEDGER_NONCANONICAL');
+    const record=JSON.parse(line);
+    if(canonical(record)!==line)throw new Error('AUDIT_LEDGER_NONCANONICAL');
+    verifyStored(record,++seq,previous,publicKey,trusted.id);
+    const id=eventDigest(record.event);
+    if(entries.has(id))throw new Error('AUDIT_DUPLICATE_EVENT');
+    if(record.event.type==='result'&&!entries.has(eventDigest(matchingIntent(record.event))))
+      throw new Error('AUDIT_RESULT_WITHOUT_INTENT');
+    entries.add(id);previous=sha256(line);
+    if(prior!==null&&seq===prior.head.seq)priorMatched=previous===prior.head.head_sha256;
+  }
+  if(!priorMatched)throw new Error('AUDIT_SNAPSHOT_FORK');
+  if(seq!==head.head.seq||previous!==head.head.head_sha256)throw new Error('AUDIT_SNAPSHOT_HEAD_MISMATCH');
+  return {seq,head_sha256:previous};
 }
 
 /** Independent single-writer process; a stale lock requires operator recovery. */
@@ -110,17 +139,34 @@ export async function openAuditLedger({directory,sinkId,privatePem,anchor=null,c
       });
       tail=op.catch(()=>{});return op;
     }
+    function makeHead(){
+      if(poisoned)throw new Error('AUDIT_LEDGER_UNSAFE');
+      const head={schema:'sac.audit.head.v1',sink_id:sinkId,seq,head_sha256:previous,captured_at:clock()};
+      if(!Number.isSafeInteger(head.captured_at))throw new Error('AUDIT_TIME_INVALID');
+      return {head,signature_b64url:sign(null,Buffer.from(HEAD_DOMAIN+canonical(head)),privateKey).toString('base64url')};
+    }
     async function signedHead(){
       if(closed||closing)throw new Error('AUDIT_LEDGER_CLOSING');
-      const op=tail.then(()=>{
+      const op=tail.then(makeHead);
+      tail=op.catch(()=>{});return op;
+    }
+    async function snapshot(){
+      if(closed||closing)throw new Error('AUDIT_LEDGER_CLOSING');
+      const op=tail.then(async()=>{
         if(poisoned)throw new Error('AUDIT_LEDGER_UNSAFE');
-        const head={schema:'sac.audit.head.v1',sink_id:sinkId,seq,head_sha256:previous,captured_at:clock()};
-        if(!Number.isSafeInteger(head.captured_at))throw new Error('AUDIT_TIME_INVALID');
-        return {head,signature_b64url:sign(null,Buffer.from(HEAD_DOMAIN+canonical(head)),privateKey).toString('base64url')};
+        const stat=await file.stat();
+        if(stat.size>MAX_LOG)throw new Error('AUDIT_LOG_FULL');
+        const bytes=Buffer.alloc(stat.size);let offset=0;
+        while(offset<bytes.length){
+          const {bytesRead}=await file.read(bytes,offset,bytes.length-offset,offset);
+          if(bytesRead===0)throw new Error('AUDIT_SNAPSHOT_READ_FAILED');
+          offset+=bytesRead;
+        }
+        return {lines:new TextDecoder('utf-8',{fatal:true}).decode(bytes),head:makeHead()};
       });
       tail=op.catch(()=>{});return op;
     }
-    return {append,signedHead, async close(){if(closing||closed)throw new Error('AUDIT_LEDGER_CLOSING');
+    return {append,signedHead,snapshot, async close(){if(closing||closed)throw new Error('AUDIT_LEDGER_CLOSING');
       closing=true;await tail;closed=true;await file.close();await lock.close();await unlink(lockPath);}};
   } catch(err){
     if(file)await file.close().catch(()=>{});
