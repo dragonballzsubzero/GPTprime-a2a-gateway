@@ -168,6 +168,18 @@ check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_WRITE_STILL_GRANTED' in guard
       query("select has_function_privilege('service_role','public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text)','execute')")=='t',
       'inherited broker write privilege aborts the entire legacy lockdown')
 psql('revoke inherited_fixture from service_role;')
+psql('create role column_fixture nologin; grant column_fixture to service_role; '
+     'grant insert (canary_tag) on sac_broker_v03.executions to column_fixture;')
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_COLUMN_WRITE_STILL_GRANTED' in guarded.stderr,
+      'inherited column-level write privilege aborts the entire legacy lockdown')
+psql('revoke column_fixture from service_role;')
+psql('create role set_fixture nologin; grant set_fixture to service_role with inherit false, set true; '
+     'grant insert on sac_broker_v03.executions to set_fixture;')
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_WRITE_STILL_GRANTED' in guarded.stderr,
+      'a non-inherited but assumable role with write access aborts the legacy lockdown')
+psql('revoke set_fixture from service_role;')
 psql(legacy)
 for role in ('anon','authenticated','service_role'):
     check(query("select not has_function_privilege('"+role+"','public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text)','execute')")=='t',
