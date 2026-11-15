@@ -10,7 +10,7 @@
 | Reconciliation | v2 observer verifies owner grant and independently supplied row; signed observation binds owner, proposal and grant; audit-only recovery never repeats effect | Synthetic source/observation, cross-grant, bad-signature and mismatch cases | Read-only external observer and source attestation not provisioned or evaluated |
 | File processing | Rootless/network-denied Docker candidate, pinned image and reviewed seccomp required | Static worker fixtures, mocked CLI, and CI workflow for a real container on the runner daemon; inspect run results | Rootless production runtime, reviewed seccomp, hostile-document corpus, escape, time/memory and network-denial tests |
 | Credential isolation | Private-file permissions; separate owner, node and auditor key roles | Wrong-mode, symlink, hardlink and signing-key tests | Process isolation, least-privilege database roles, rotation and trusted key custody not established |
-| Model evaluation | Protocol makes no assumptions about model provider | Synthetic action proposals only | Controlled, authorized live-model test with independently verifiable provider and effect evidence |
+| Model evaluation | Protocol makes no assumptions about model provider; pinned CPU smoke harness under `ci/broker-v04-model-eval` | Synthetic fixture proposals; inspect any bounded live-model job separately | Commissioned model/provider, owner-approved live canary and independently verifiable effect evidence |
 
 The current live v0.3 deployment and database were inspected read-only. Its three existing preview identities remained revoked and quarantined, and zero owner/node keys were enrolled at the time of inspection. v0.4 has not been deployed; the new candidate does not confer any authority on those identities.
 
