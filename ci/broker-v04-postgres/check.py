@@ -62,6 +62,9 @@ def start_hold(sql):
 print('PostgreSQL', query('show server_version;'), 'container image', image, flush=True)
 psql(Path('ci/broker-v04-postgres/fixture.sql').read_text())
 psql(Path('broker-v04/sql/execute-canary.candidate.sql').read_text())
+duplicate=psql(Path('broker-v04/sql/execute-canary.candidate.sql').read_text(),ok=False)
+check(duplicate.returncode!=0 and 'SAC_BROKER_V04_FUNCTION_ALREADY_EXISTS' in duplicate.stderr,
+      'installation refuses to overwrite an existing function')
 
 nonce='1'*32
 with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
@@ -126,7 +129,7 @@ check(holder.wait(timeout=10)==0 and p.returncode!=0 and 'GRANT_EXPIRED_DURING_A
 check(query("select count(*) from sac_broker_v03.spent_grants where nonce='"+nonce+"'")=='0' and
       query('select count(*) from sac_broker_v03.executions')=='1', 'expired wait writes no effect or spent nonce')
 
-for role in ('anon','authenticated'):
+for role in ('anon','authenticated','service_role'):
     p=psql('set role '+role+'; '+execute('9'*32),ok=False)
     check(p.returncode!=0 and 'permission denied' in p.stderr, role+' cannot call the candidate function')
 
