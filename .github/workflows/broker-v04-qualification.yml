@@ -35,3 +35,12 @@ jobs:
           persist-credentials: false
       - name: Exercise triage image and Docker restrictions
         run: bash ci/broker-v04-postgres/container-smoke.sh
+  rootless-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Exercise wrapper on an ephemeral rootless daemon
+        run: bash ci/broker-v04-postgres/rootless-smoke.sh
