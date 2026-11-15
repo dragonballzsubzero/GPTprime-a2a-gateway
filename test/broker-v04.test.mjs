@@ -5,7 +5,7 @@ import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {canonical,digest} from '../broker-v03/client.mjs';
-import {createBroker,verifyAuditAck,eventDigest,sha256,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
+import {createBroker,verifyAuditAck,verifyAuditHead,eventDigest,sha256,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
 import {createBrokerHttpServer} from '../broker-v04/http.mjs';
 import {openAuditLedger} from '../broker-v04/audit-ledger.mjs';
 import {reconcile,recoverAuditResult} from '../broker-v04/reconcile.mjs';
@@ -128,6 +128,17 @@ test('invalid or unavailable audit intent blocks before effect',async()=>{
     assert.equal(f.calls.executions,0);
   }
 });
+test('signed audit intent time outside the owner grant blocks before effect',async()=>{
+  for(const accepted_at of [N-1,N+60,N+1000]){
+    const f=fixture();
+    f.deps.audit.append=async event=>{
+      const ack={schema:'sac.audit.ack.v1',sink_id:'independent-audit',event_sha256:eventDigest(event),event_type:event.type,accepted_at};
+      return {ack,signature_b64url:signBody(f.auditor,'sac.audit.ack.v1\n',ack)};
+    };
+    await assert.rejects(createBroker(f.deps).execute(bearer,f.request),errorCode('AUDIT_INTENT_TIME_INVALID'));
+    assert.equal(f.calls.executions,0);
+  }
+});
 test('expiry after audit intent prevents execution',async()=>{
   const f=fixture(),original=f.deps.audit.append;
   f.deps.audit.append=async event=>{const ack=await original(event);f.setNow(N+60);return ack;};
@@ -146,6 +157,16 @@ test('result logging failure reports executed and pending, never automatic retry
   const result=await createBroker(f.deps).execute(bearer,f.request);
   assert.equal(result.status,'EXECUTED_AUDIT_PENDING');assert.equal(result.automatic_retry,false);
   assert.equal(f.calls.executions,1);
+});
+test('signed result with an impossible future audit time remains pending',async()=>{
+  const f=fixture(),original=f.deps.audit.append;
+  f.deps.audit.append=async event=>{
+    if(event.type==='intent')return original(event);
+    const ack={schema:'sac.audit.ack.v1',sink_id:'independent-audit',event_sha256:eventDigest(event),event_type:event.type,accepted_at:N+1000};
+    return {ack,signature_b64url:signBody(f.auditor,'sac.audit.ack.v1\n',ack)};
+  };
+  const out=await createBroker(f.deps).execute(bearer,f.request);
+  assert.equal(out.status,'EXECUTED_AUDIT_PENDING');assert.equal(f.calls.executions,1);
 });
 test('uncertain store outcome never asserts an effect or retries',async()=>{
   const f=fixture();let calls=0;
@@ -204,6 +225,28 @@ test('ledger rejects removal of an interior signed event even if chain hashes ar
     records[2].seq=2;records[2].prev_sha256=sha256(first);
     await writeFile(file,first+'\n'+canonical(records[2])+'\n');
     await assert.rejects(openAuditLedger({directory:dir,sinkId:'independent-audit',privatePem:pem}),/AUDIT_CHAIN_SIGNATURE_INVALID/);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('independently saved signed audit head detects loss of the anchored suffix',async()=>{
+  const f=fixture(),dir=await mkdtemp(path.join(tmpdir(),'broker-v04-anchor-'));
+  const pem=f.auditor.privateKey.export({type:'pkcs8',format:'pem'}).toString();
+  try{
+    const opts={directory:dir,sinkId:'independent-audit',privatePem:pem,clock:()=>N};
+    const ledger=await openAuditLedger(opts);
+    const event={schema:'sac.audit.event.v1',type:'intent',owner_id:ownerId,node:f.action.node,run:f.action.run,
+      proposal_id:proposalId,action_digest:digest(f.action),grant_sha256:'a'.repeat(64),nonce:'1'.repeat(32),audience,environment};
+    await ledger.append(event);await ledger.append({...event,nonce:'2'.repeat(32)});
+    const anchor=await ledger.signedHead();assert.equal(anchor.head.seq,2);
+    assert.equal(verifyAuditHead(anchor,f.deps.trustedAudit),true);
+    await ledger.append({...event,nonce:'3'.repeat(32)});await ledger.close();
+    const reopened=await openAuditLedger({...opts,anchor});await reopened.close();
+    const file=path.join(dir,'audit.jsonl'),lines=(await readFile(file,'utf8')).trim().split('\n');
+    await writeFile(file,lines[0]+'\n');
+    await assert.rejects(openAuditLedger({...opts,anchor}),/AUDIT_ANCHOR_MISMATCH/);
+    await assert.rejects(openAuditLedger({...opts,anchor:{...anchor,head:{...anchor.head,seq:1}}}),/AUDIT_ANCHOR_INVALID/);
+    await assert.rejects(openAuditLedger({...opts,anchor:false}),/AUDIT_ANCHOR_INVALID/);
+    // Without an externally retained head, deleting a valid tail is undetectable.
+    const noAnchor=await openAuditLedger(opts);await noAnchor.close();
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 test('HTTP adapter rejects duplicate JSON keys and missing authentication',async()=>{

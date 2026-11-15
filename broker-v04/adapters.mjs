@@ -94,11 +94,21 @@ export function createSupabaseAdapters({origin, anonKey, serviceKey, fetchImpl=f
 export function createHttpsAuditClient({origin, secretProvider, fetchImpl=fetch}) {
   const base=httpsBase(origin);
   if(typeof secretProvider!=='function')throw new Error('AUDIT_CREDENTIAL_PROVIDER_REQUIRED');
-  return {async append(event){
+  async function credential(){
     const secret=await secretProvider();
     if(typeof secret!=='string' || secret.length<32 || /[\r\n]/.test(secret))throw new Error('AUDIT_CREDENTIAL_UNAVAILABLE');
+    return secret;
+  }
+  return {async append(event){
+    const secret=await credential();
     const response=await fetchImpl(base+'/append',{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),
       headers:{'content-type':'application/json',authorization:'Bearer '+secret},body:JSON.stringify(event)});
+    if(!response.ok)throw new Error('AUDIT_UNAVAILABLE');
+    return jsonResponse(response);
+  },async head(){
+    const secret=await credential();
+    const response=await fetchImpl(base+'/head',{method:'GET',redirect:'error',signal:AbortSignal.timeout(5000),
+      headers:{authorization:'Bearer '+secret}});
     if(!response.ok)throw new Error('AUDIT_UNAVAILABLE');
     return jsonResponse(response);
   }};

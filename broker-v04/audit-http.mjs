@@ -3,16 +3,21 @@ import {createHash,timingSafeEqual} from 'node:crypto';
 
 /** Loopback-only HTTP component; production TLS and broker egress are external gates. */
 export function createAuditHttpServer({ledger,bearerToken}){
-  if(!ledger?.append || typeof bearerToken!=='string' || bearerToken.length<32 || /[\r\n]/.test(bearerToken))
+  if(!ledger?.append || !ledger?.signedHead || typeof bearerToken!=='string' || bearerToken.length<32 || /[\r\n]/.test(bearerToken))
     throw new Error('AUDIT_CONFIGURATION_INVALID');
   const expected=createHash('sha256').update(bearerToken).digest();
   return http.createServer(async(req,res)=>{
     const reply=(status,obj)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(obj));};
-    if(req.method!=='POST'||req.url!=='/append')return reply(404,{error:'NOT_FOUND'});
+    const isAppend=req.method==='POST'&&req.url==='/append';
+    const isHead=req.method==='GET'&&req.url==='/head';
+    if(!isAppend&&!isHead)return reply(404,{error:'NOT_FOUND'});
     const h=req.headers.authorization||'';
     const supplied=h.startsWith('Bearer ')?h.slice(7):'';
     const candidate=createHash('sha256').update(supplied).digest();
     if(!timingSafeEqual(expected,candidate))return reply(401,{error:'AUTH_REQUIRED'});
+    if(isHead){
+      try{return reply(200,await ledger.signedHead());}catch{return reply(503,{error:'AUDIT_UNAVAILABLE'});}
+    }
     if((req.headers['content-type']||'').split(';')[0].trim().toLowerCase()!=='application/json')return reply(415,{error:'JSON_REQUIRED'});
     try {
       let chunks=[],size=0;

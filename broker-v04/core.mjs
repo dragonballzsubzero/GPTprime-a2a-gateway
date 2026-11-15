@@ -5,6 +5,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const KID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const AUDIT_DOMAIN = 'sac.audit.ack.v1\n';
+const AUDIT_HEAD_DOMAIN = 'sac.audit.head.v1\n';
 const SINK_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const NODE = /^[a-z][a-z0-9._-]{2,63}$/;
 const ID = /^[A-Za-z0-9_.:-]{1,100}$/;
@@ -79,6 +80,15 @@ export function verifyAuditAck(event, envelope, trusted) {
   } catch { return false; }
 }
 
+export function verifyAuditHead(envelope,trusted){
+  const fields=['schema','sink_id','seq','head_sha256','captured_at'];
+  if(!trusted||!SINK_ID.test(trusted.id||'')||!exact(envelope,['head','signature_b64url'])||!exact(envelope.head,fields)||
+     envelope.head.schema!=='sac.audit.head.v1'||envelope.head.sink_id!==trusted?.id||
+     !Number.isSafeInteger(envelope.head.seq)||envelope.head.seq<0||
+     !HEX64.test(envelope.head.head_sha256||'')||!Number.isSafeInteger(envelope.head.captured_at))return false;
+  return verifyEd25519(trusted.public_jwk,envelope.signature_b64url,AUDIT_HEAD_DOMAIN+canonical(envelope.head));
+}
+
 const PROPOSE_KEYS=['action','node_kid','node_signature_b64url'];
 const EXECUTE_KEYS=[...PROPOSE_KEYS,'proposal_id','grant','owner_kid','grant_signature_b64url'];
 
@@ -134,6 +144,8 @@ export function createBroker({auth,keys,store,audit,trustedAudit,audience,enviro
       let ack;
       try {ack=await audit.append(intent);} catch {throw new BrokerError('AUDIT_INTENT_UNAVAILABLE',503);}
       must(verifyAuditAck(intent,ack,trustedAudit),'AUDIT_INTENT_UNVERIFIED',503);
+      must(ack.ack.accepted_at>=body.grant.iat && ack.ack.accepted_at<body.grant.exp &&
+        ack.ack.accepted_at<=clock()+30,'AUDIT_INTENT_TIME_INVALID',503);
       must(clock()<body.grant.exp,'GRANT_EXPIRED_BEFORE_EXECUTION');
       // Recheck the same owner's session after the potentially slow audit hop.
       // The transaction still needs its own atomic revocation design.
@@ -159,7 +171,8 @@ export function createBroker({auth,keys,store,audit,trustedAudit,audience,enviro
         effect_sha256:execution.effect_sha256};
       let resultAck;
       try {resultAck=await audit.append(result);} catch {}
-      const recorded=verifyAuditAck(result,resultAck,trustedAudit);
+      const recorded=verifyAuditAck(result,resultAck,trustedAudit) &&
+        resultAck.ack.accepted_at>=ack.ack.accepted_at && resultAck.ack.accepted_at<=clock()+30;
       return {status:recorded?'EXECUTED_AUDIT_RECORDED':'EXECUTED_AUDIT_PENDING',
         execution_id:execution.execution_id,action_digest:c.digest,effect_sha256:execution.effect_sha256,
         audit_status:recorded?'INDEPENDENT_LOG_RECORDED_NOT_RECONCILED':'PENDING_INDEPENDENT_RECONCILIATION',

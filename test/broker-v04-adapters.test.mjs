@@ -8,7 +8,7 @@ import net from 'node:net';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createSupabaseAdapters,createHttpsAuditClient} from '../broker-v04/adapters.mjs';
-import {createBroker,verifyAuditAck,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
+import {createBroker,verifyAuditAck,verifyAuditHead,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
 import {canonical,digest} from '../broker-v03/client.mjs';
 import {createBrokerHttpServer} from '../broker-v04/http.mjs';
 import {readPrivateFile} from '../broker-v04/secrets.mjs';
@@ -136,6 +136,11 @@ test('separate local audit process durably signs and deduplicates events after r
     res=await fetch(url,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+secret},body:JSON.stringify(event)});
     assert.equal(res.status,200);const ack=await res.json();
     assert.equal(verifyAuditAck(event,ack,{id:'local-auditor',public_jwk:keys.publicKey.export({format:'jwk'})}),true);
+    res=await fetch(`http://127.0.0.1:${port}/head`);assert.equal(res.status,401);
+    res=await fetch(`http://127.0.0.1:${port}/head`,{headers:{authorization:'Bearer '+secret}});
+    assert.equal(res.status,200);const head=await res.json();
+    assert.equal(head.head.seq,1);
+    assert.equal(verifyAuditHead(head,{id:'local-auditor',public_jwk:keys.publicKey.export({format:'jwk'})}),true);
     await stop(child);child=null;
     child=await startAudit(env);
     res=await fetch(url,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+secret},body:JSON.stringify(event)});
@@ -161,8 +166,9 @@ test('local HTTP broker sends signed intent and result to a separate audit proce
     const action={node:'adapter.one',run:'r1',operation:'audit_canary',resource:'sac://broker/canary',parameters:{tag:'safe'}};
     const proposalId='00000000-0000-4000-8000-000000000002';
     const baseProposal={action,node_kid:'node1',node_signature_b64url:sign(null,Buffer.from(NODE_DOMAIN+canonical(action)),node.privateKey).toString('base64url')};
+    const realNow=Math.floor(Date.now()/1000);
     const grant={schema:'sac.exact-action.v4',owner:sub,node:action.node,run:action.run,action_digest:digest(action),
-      proposal_id:proposalId,nonce:'1'.repeat(32),iat:now,exp:now+30,audience:'sac://broker/staging/v04',
+      proposal_id:proposalId,nonce:'1'.repeat(32),iat:realNow-1,exp:realNow+60,audience:'sac://broker/staging/v04',
       environment:'staging',owner_kid:'owner1',node_kid:'node1'};
     const request={...baseProposal,proposal_id:proposalId,grant,owner_kid:'owner1',
       grant_signature_b64url:sign(null,Buffer.from(GRANT_DOMAIN+canonical(grant)),owner.privateKey).toString('base64url')};
@@ -178,7 +184,7 @@ test('local HTTP broker sends signed intent and result to a separate audit proce
         executeCanary:async p=>{if(spent.has(p.nonce))return {executed:false,reason:'GRANT_REPLAY'};
           spent.add(p.nonce);executions++;return {executed:true,execution_id:'00000000-0000-4000-8000-000000000003',effect_sha256:'b'.repeat(64)};}},
       audit,trustedAudit:{id:'local-sink',public_jwk:sink.publicKey.export({format:'jwk'})},
-      audience:'sac://broker/staging/v04',environment:'staging',clock:()=>now+1});
+      audience:'sac://broker/staging/v04',environment:'staging',clock:()=>Math.floor(Date.now()/1000)});
     server=createBrokerHttpServer(broker);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     const url=`http://127.0.0.1:${server.address().port}`;
     const post=(route,obj)=>fetch(url+route,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+tokenValue},body:JSON.stringify(obj)});

@@ -35,7 +35,8 @@ function validateObservation({intent,intent_ack,result,observation,observation_s
 export function reconcile({intent,intent_ack,result,result_ack,observation,observation_signature,
                            trustedAudit,trustedObserver,now=Math.floor(Date.now()/1000)}){
   validateObservation({intent,intent_ack,result,observation,observation_signature,trustedAudit,trustedObserver,now});
-  if(!verifyAuditAck(result,result_ack,trustedAudit))throw Error('AUDIT_ACK_INVALID');
+  if(!verifyAuditAck(result,result_ack,trustedAudit)||result_ack.ack.accepted_at<intent_ack.ack.accepted_at||
+     result_ack.ack.accepted_at>now+30)throw Error('AUDIT_ACK_INVALID');
   return {status:'RECONCILED_SIGNED_OBSERVATION',execution_id:result.execution_id,
     intent_sha256:eventDigest(intent),result_sha256:eventDigest(result),
     observer_statement_sha256:sha256(canonical(observation)),

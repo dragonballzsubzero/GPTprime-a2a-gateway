@@ -3,7 +3,7 @@ import {open,lstat,unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {createPrivateKey,createPublicKey,sign,verify} from 'node:crypto';
 import {canonical} from '../broker-v03/client.mjs';
-import {sha256,eventDigest} from './core.mjs';
+import {sha256,eventDigest,verifyAuditHead} from './core.mjs';
 
 const MAX_LOG=64*1024*1024;
 const ZERO='0'.repeat(64), HEX=/^[0-9a-f]{64}$/, HEX32=/^[0-9a-f]{32}$/;
@@ -11,6 +11,7 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID=/^[A-Za-z0-9_.:-]{1,100}$/;
 const ACK_DOMAIN='sac.audit.ack.v1\n';
 const CHAIN_DOMAIN='sac.audit.chain.v1\n';
+const HEAD_DOMAIN='sac.audit.head.v1\n';
 const BASE=['schema','type','owner_id','node','run','proposal_id','action_digest','grant_sha256','nonce','audience','environment'];
 function exact(x,keys){return x && typeof x==='object'&&!Array.isArray(x)&&Object.getPrototypeOf(x)===Object.prototype&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
 function matchingIntent(result){
@@ -51,13 +52,15 @@ function verifyStored(record,seq,prev,publicKey,sinkId){
 }
 
 /** Independent single-writer process; a stale lock requires operator recovery. */
-export async function openAuditLedger({directory,sinkId,privatePem,clock=()=>Math.floor(Date.now()/1000)}){
+export async function openAuditLedger({directory,sinkId,privatePem,anchor=null,clock=()=>Math.floor(Date.now()/1000)}){
   if(!path.isAbsolute(directory)||!/^[A-Za-z0-9_.:-]{1,64}$/.test(sinkId||''))throw new Error('AUDIT_CONFIGURATION_INVALID');
   const dir=await lstat(directory);
   if(!dir.isDirectory()||dir.isSymbolicLink()||(dir.mode&0o077)!==0)throw new Error('AUDIT_DIRECTORY_NOT_PRIVATE');
   if(typeof process.getuid==='function' && dir.uid!==process.getuid())throw new Error('AUDIT_DIRECTORY_OWNER_MISMATCH');
   const privateKey=createPrivateKey(privatePem),publicKey=createPublicKey(privateKey);
   if(privateKey.asymmetricKeyType!=='ed25519')throw new Error('AUDIT_ED25519_REQUIRED');
+  if(anchor!==null && !verifyAuditHead(anchor,{id:sinkId,public_jwk:publicKey.export({format:'jwk'})}))
+    throw new Error('AUDIT_ANCHOR_INVALID');
   const lockPath=path.join(directory,'writer.lock'), filePath=path.join(directory,'audit.jsonl');
   let lock,file;
   try {
@@ -69,6 +72,7 @@ export async function openAuditLedger({directory,sinkId,privatePem,clock=()=>Mat
     const contents=await file.readFile({encoding:'utf8'});
     if(contents && !contents.endsWith('\n'))throw new Error('AUDIT_LEDGER_TRUNCATED');
     let previous=ZERO,seq=0;const entries=new Map();
+    let anchorMatched=anchor===null || (anchor.head.seq===0 && anchor.head.head_sha256===ZERO);
     for(const line of contents.split('\n')){
       if(!line)continue;
       const record=JSON.parse(line);
@@ -80,7 +84,9 @@ export async function openAuditLedger({directory,sinkId,privatePem,clock=()=>Mat
         throw new Error('AUDIT_RESULT_WITHOUT_INTENT');
       entries.set(id,{ack:record.ack,signature_b64url:record.signature_b64url});
       previous=sha256(line);
+      if(anchor!==null && seq===anchor.head.seq)anchorMatched=previous===anchor.head.head_sha256;
     }
+    if(!anchorMatched)throw new Error('AUDIT_ANCHOR_MISMATCH');
     let tail=Promise.resolve(),closed=false,closing=false,poisoned=false;
     async function append(event){
       if(closed||closing)throw new Error('AUDIT_LEDGER_CLOSING');
@@ -104,7 +110,17 @@ export async function openAuditLedger({directory,sinkId,privatePem,clock=()=>Mat
       });
       tail=op.catch(()=>{});return op;
     }
-    return {append, async close(){if(closing||closed)throw new Error('AUDIT_LEDGER_CLOSING');
+    async function signedHead(){
+      if(closed||closing)throw new Error('AUDIT_LEDGER_CLOSING');
+      const op=tail.then(()=>{
+        if(poisoned)throw new Error('AUDIT_LEDGER_UNSAFE');
+        const head={schema:'sac.audit.head.v1',sink_id:sinkId,seq,head_sha256:previous,captured_at:clock()};
+        if(!Number.isSafeInteger(head.captured_at))throw new Error('AUDIT_TIME_INVALID');
+        return {head,signature_b64url:sign(null,Buffer.from(HEAD_DOMAIN+canonical(head)),privateKey).toString('base64url')};
+      });
+      tail=op.catch(()=>{});return op;
+    }
+    return {append,signedHead, async close(){if(closing||closed)throw new Error('AUDIT_LEDGER_CLOSING');
       closing=true;await tail;closed=true;await file.close();await lock.close();await unlink(lockPath);}};
   } catch(err){
     if(file)await file.close().catch(()=>{});
