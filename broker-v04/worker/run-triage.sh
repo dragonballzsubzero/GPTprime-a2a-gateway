@@ -25,10 +25,16 @@ fi
 if ! docker info --format '{{json .SecurityOptions}}' | grep -q 'name=rootless'; then
   echo 'Rootless Docker is required for this staging profile' >&2; exit 2
 fi
-exec timeout --kill-after=3s 30s docker run --rm --pull=never --network=none \
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+stage_dir=$(mktemp -d /tmp/sac-triage.XXXXXXXX)
+trap 'rm -rf -- "$stage_dir"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+python3 -I -B "$script_dir/stage_input.py" "$intake" "$input" "$stage_dir/item"
+timeout --kill-after=3s 30s docker run --rm --pull=never --network=none \
   --read-only --user=65534:65534 --cap-drop=ALL --security-opt=no-new-privileges \
   --security-opt "seccomp=$SAC_SECCOMP_PROFILE" --pids-limit=32 --memory=256m \
   --memory-swap=256m --cpus=0.5 --ulimit nofile=64:64 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-  --mount "type=bind,src=$input,dst=/input/item,readonly" \
+  --mount "type=bind,src=$stage_dir/item,dst=/input/item,readonly" \
   "$SAC_TRIAGE_IMAGE" /input/item

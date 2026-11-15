@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,symlinkSync,rmSync,copyFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,symlinkSync,rmSync,copyFileSync,linkSync,statSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -26,7 +26,7 @@ test('triage wrapper rejects mutable image, out-of-intake and symlink paths',()=
   const symlink=path.join(intake,'link');symlinkSync(input,symlink);
   p=spawnSync('sh',[script,symlink],{env,encoding:'utf8'});assert.notEqual(p.status,0);
 }));
-test('triage wrapper passes restrictive arguments to a mocked rootless Docker CLI',()=>fixture(({env,input,record})=>{
+test('triage wrapper stages input and passes restrictive arguments to a mocked rootless Docker CLI',()=>fixture(({env,input,record})=>{
   const syntax=spawnSync('sh',['-n',script],{encoding:'utf8'});assert.equal(syntax.status,0,syntax.stderr);
   const p=spawnSync('sh',[script,input],{env,encoding:'utf8'});assert.equal(p.status,0,p.stderr);
   const args=readFileSync(record,'utf8').split('\n');
@@ -34,6 +34,23 @@ test('triage wrapper passes restrictive arguments to a mocked rootless Docker CL
     '--security-opt=no-new-privileges','--pids-limit=32','--memory=256m','--memory-swap=256m','--cpus=0.5'])
     assert.ok(args.includes(required),required);
   assert.ok(args.some(x=>x.startsWith('seccomp=')));
+  const mount=args.find(x=>x.startsWith('type=bind,src='));
+  assert.ok(mount && !mount.includes('src='+input+','));
+  assert.match(mount,/src=\/tmp\/sac-triage\./);
+  assert.equal(existsSync(mount.split(',')[1].slice(4)),false);
+}));
+test('staging snapshots the file and rejects links and out-of-root paths',()=>fixture(({dir,input,intake})=>{
+  const stage=path.resolve('broker-v04/worker/stage_input.py'),out=path.join(dir,'snapshot');
+  let p=spawnSync('python3',['-I','-B',stage,intake,input,out],{encoding:'utf8'});
+  assert.equal(p.status,0,p.stderr);assert.equal(readFileSync(out,'utf8'),'fixture');
+  assert.equal(statSync(out).mode&0o777,0o444);
+  writeFileSync(input,'changed');assert.equal(readFileSync(out,'utf8'),'fixture');
+  const symlink=path.join(intake,'sym');symlinkSync(input,symlink);
+  p=spawnSync('python3',['-I','-B',stage,intake,symlink,path.join(dir,'out2')],{encoding:'utf8'});assert.notEqual(p.status,0);
+  const hard=path.join(intake,'hard');linkSync(input,hard);
+  p=spawnSync('python3',['-I','-B',stage,intake,input,path.join(dir,'out3')],{encoding:'utf8'});assert.notEqual(p.status,0);
+  const outside=path.join(dir,'outside');writeFileSync(outside,'fixture');
+  p=spawnSync('python3',['-I','-B',stage,intake,outside,path.join(dir,'out4')],{encoding:'utf8'});assert.notEqual(p.status,0);
 }));
 test('v0.4 scanner entry returns failure for rejected input and advisory for inert text',()=>fixture(({dir,input})=>{
   const entry=path.join(dir,'triage_entry.py'),scanner=path.join(dir,'triage_worker.py');

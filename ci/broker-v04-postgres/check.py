@@ -72,6 +72,28 @@ check(sum(x.get('executed') is True for x in replies)==1 and
 check(query('select count(*) from sac_broker_v03.executions')=='1' and
       query('select count(*) from sac_broker_v03.audit_evidence')=='2',
       'one canary and two audit-hash rows commit atomically')
+check(query('show fsync;')=='on' and query('show synchronous_commit;')=='on',
+      'fixture uses synchronous PostgreSQL durability settings')
+
+# Crash the disposable server with one uncommitted nonce, then verify both
+# committed replay state and rollback of the interrupted transaction.
+crashNonce='f'*32
+holder=start_hold("begin; insert into sac_broker_v03.spent_grants(owner_id,nonce,action_digest) "
+  "values('11111111-1111-4111-8111-111111111111','"+crashNonce+"',repeat('a',64)); "
+  "select pg_sleep(30) /* ci-lock-holder */; rollback;")
+subprocess.run(['docker','kill','--signal','KILL',container],check=True,capture_output=True,text=True,timeout=20)
+holder.wait(timeout=10)
+subprocess.run(['docker','start',container],check=True,capture_output=True,text=True,timeout=20)
+deadline=time.monotonic()+30
+while time.monotonic()<deadline:
+    probe=psql('select 1;',ok=False)
+    if probe.returncode==0: break
+    time.sleep(.2)
+else: raise AssertionError('PostgreSQL did not recover after crash')
+check(result(execute(nonce)).get('reason')=='GRANT_REPLAY' and
+      query('select count(*) from sac_broker_v03.executions')=='1' and
+      query("select count(*) from sac_broker_v03.spent_grants where nonce='"+crashNonce+"'")=='0',
+      'crash recovery retains committed replay state and rolls back the interrupted transaction')
 
 cases=[('2'*32, {'tag':'different'}, 'PROPOSAL_MISMATCH'),
        ('3'*32, {'owner_kid':'different'}, 'KEYS_ROTATED_OR_INACTIVE'),

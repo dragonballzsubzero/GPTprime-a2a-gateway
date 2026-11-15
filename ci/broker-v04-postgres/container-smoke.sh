@@ -5,7 +5,9 @@ set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
 work="${RUNNER_TEMP:?}/sac-triage-smoke"
 mkdir -p "$work/intake"
+mkdir -p "$work/staged"
 chmod 755 "$work" "$work/intake"
+chmod 700 "$work/staged"
 printf 'inert test fixture\n' > "$work/intake/benign.txt"
 chmod 644 "$work/intake/benign.txt"
 python3 - "$work/intake/traversal.zip" <<'PY'
@@ -14,6 +16,9 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
     z.writestr('../outside.txt','inert')
 PY
 chmod 644 "$work/intake/traversal.zip"
+python3 -I -B broker-v04/worker/stage_input.py "$work/intake" "$work/intake/benign.txt" "$work/staged/benign"
+python3 -I -B broker-v04/worker/stage_input.py "$work/intake" "$work/intake/traversal.zip" "$work/staged/traversal"
+printf 'changed after staging\n' > "$work/intake/benign.txt"
 docker pull python:3.13-slim
 base=$(docker image inspect --format '{{index .RepoDigests 0}}' python:3.13-slim)
 case "$base" in *@sha256:*) ;; *) echo 'Docker did not resolve a digest' >&2; exit 1;; esac
@@ -22,14 +27,15 @@ docker build --build-arg "BASE_IMAGE=$base" -f broker-v04/worker/Dockerfile -t s
 args=(--rm --network=none --read-only --user=65534:65534 --cap-drop=ALL
       --security-opt=no-new-privileges --pids-limit=32 --memory=256m --memory-swap=256m
       --cpus=0.5 --ulimit nofile=64:64 --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m)
-benign=$(docker run "${args[@]}" --mount "type=bind,src=$work/intake/benign.txt,dst=/input/item,readonly" sac-triage-ci:local /input/item)
+benign=$(docker run "${args[@]}" --mount "type=bind,src=$work/staged/benign,dst=/input/item,readonly" sac-triage-ci:local /input/item)
 python3 - "$benign" <<'PY'
-import json,sys
+import hashlib,json,sys
 x=json.loads(sys.argv[1]); assert x['status']=='ADVISORY_ONLY' and x['format']=='utf8',x
-print('PASS real container triages inert text')
+assert x['sha256']==hashlib.sha256(b'inert test fixture\n').hexdigest(),x
+print('PASS real container triages the original staged snapshot after intake changes')
 PY
 set +e
-traversal=$(docker run "${args[@]}" --mount "type=bind,src=$work/intake/traversal.zip,dst=/input/item,readonly" sac-triage-ci:local /input/item)
+traversal=$(docker run "${args[@]}" --mount "type=bind,src=$work/staged/traversal,dst=/input/item,readonly" sac-triage-ci:local /input/item)
 status=$?
 set -e
 test "$status" -eq 1
@@ -38,7 +44,7 @@ import json,sys
 x=json.loads(sys.argv[1]); assert x['status']=='REJECT' and x['reason']=='ZIP_PATH_TRAVERSAL',x
 print('PASS real container rejects path-traversing ZIP metadata')
 PY
-docker run "${args[@]}" --mount "type=bind,src=$work/intake/benign.txt,dst=/input/item,readonly" \
+docker run "${args[@]}" --mount "type=bind,src=$work/staged/benign,dst=/input/item,readonly" \
   --entrypoint python sac-triage-ci:local -I -c '
 import os,socket
 assert os.geteuid()==65534
