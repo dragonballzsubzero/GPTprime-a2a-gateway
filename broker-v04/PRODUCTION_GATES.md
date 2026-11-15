@@ -14,4 +14,6 @@
 
 On 2026-11-15, the v0.4 function was installed in the live database with no API role able to execute it; see `LIVE_INSTALL_2026-11-15.md`. The v0.4 broker runtime was not deployed. Its three existing preview identities remained revoked and quarantined, and zero owner/node keys were enrolled at the time of inspection. The locked function does not confer any authority on those identities.
 
+The old v0.3 effect RPC and direct API-role broker-table writes were subsequently revoked in the same project, after an empty-state guard and disposable PostgreSQL tests. The v0.3 proposal RPC remains a security-definer indirect write path, and the service credential remains broad; neither a least-privilege runtime nor independent signature admission has been deployed.
+
 No automated check in this repository should promote the release to production. A reviewer must verify the deployed artifacts and all required independent evidence under the actual host and operator boundaries.
