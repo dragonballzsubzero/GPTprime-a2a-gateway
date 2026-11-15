@@ -51,6 +51,14 @@ jobs:
           fi
           if ! grep -q "^$(id -un):" /etc/subuid; then sudo usermod --add-subuids 100000-165535 "$(id -un)"; fi
           if ! grep -q "^$(id -un):" /etc/subgid; then sudo usermod --add-subgids 100000-165535 "$(id -un)"; fi
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/sac-delegate.conf >/dev/null
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl restart "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          test -S "/run/user/$(id -u)/bus"
       - name: Set up rootless Docker
         uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6 # v5
         with:
