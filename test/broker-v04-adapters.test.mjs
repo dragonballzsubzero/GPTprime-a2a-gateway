@@ -15,18 +15,37 @@ import {readPrivateFile} from '../broker-v04/secrets.mjs';
 
 const base='https://example.supabase.co',sub='00000000-0000-4000-8000-000000000001',now=1800000000;
 const token=(claims)=>[Buffer.from('{}').toString('base64url'),Buffer.from(JSON.stringify(claims)).toString('base64url'),'sig'].join('.');
-const claims={iss:base+'/auth/v1',aal:'aal2',sub,exp:now+60};
+const sessionId='00000000-0000-4000-8000-000000000007';
+const claims={iss:base+'/auth/v1',aal:'aal2',sub,session_id:sessionId,iat:now-1,exp:now+60};
 function response(obj,status=200){return new Response(JSON.stringify(obj),{status,headers:{'content-type':'application/json'}});}
 
 test('Supabase adapter binds verified subject and AAL2 to caller; fake network only',async()=>{
   const calls=[];
-  const fetchImpl=async(url,options)=>{calls.push({url,options});return response({id:sub});};
+  const fetchImpl=async(url,options)=>{calls.push({url,options});return url.endsWith('/auth/v1/user')?
+    response({id:sub}):response({schema:'gptprime.owner-session-gate.v1',allowed:true,code:'OWNER_SESSION_VERIFIED'});};
   const x=createSupabaseAdapters({origin:base,anonKey:'anon-test',serviceKey:'service-test',fetchImpl,clock:()=>now});
   assert.deepEqual(await x.auth.authenticate(token(claims)),{owner_id:sub,aal:'aal2'});
   assert.equal(calls[0].url,base+'/auth/v1/user');assert.equal(calls[0].options.headers.apikey,'anon-test');
-  for(const bad of [{...claims,aal:'aal1'},{...claims,iss:'https://else.invalid/auth/v1'},{...claims,exp:now}])
+  assert.equal(calls[1].url,base+'/rest/v1/rpc/gptprime_v19_owner_session_gate_v1');
+  assert.equal(JSON.parse(calls[1].options.body).p_session_id,sessionId);
+  for(const bad of [{...claims,aal:'aal1'},{...claims,iss:'https://else.invalid/auth/v1'},{...claims,exp:now},
+                    {...claims,session_id:'bad'},{...claims,iat:now-901}])
     await assert.rejects(x.auth.authenticate(token(bad)),e=>e.code==='AUTH_SESSION_DENIED');
-  assert.equal(calls.length,1);
+  assert.equal(calls.length,2);
+});
+test('session gate denial, outage and malformed response fail closed',async()=>{
+  for(const [mode,expected] of [['revoked','AUTH_SESSION_DENIED'],['offline','AUTH_SESSION_GATE_UNAVAILABLE'],
+                                ['malformed','AUTH_SESSION_GATE_UNAVAILABLE'],['false-positive','AUTH_SESSION_GATE_UNAVAILABLE']]){
+    const fetchImpl=async url=>{
+      if(url.endsWith('/auth/v1/user'))return response({id:sub});
+      if(mode==='offline')throw Error('network');
+      if(mode==='revoked')return response({schema:'gptprime.owner-session-gate.v1',allowed:false,code:'SESSION_MISSING_REVOKED_OR_NOT_AAL2'});
+      if(mode==='false-positive')return response({schema:'gptprime.owner-session-gate.v1',allowed:true,code:'UNEXPECTED'});
+      return response(null);
+    };
+    const x=createSupabaseAdapters({origin:base,anonKey:'a',serviceKey:'s',fetchImpl,clock:()=>now});
+    await assert.rejects(x.auth.authenticate(token(claims)),e=>e.code===expected);
+  }
 });
 test('Supabase adapter rejects different user returned by authenticated service',async()=>{
   const x=createSupabaseAdapters({origin:base,anonKey:'a',serviceKey:'s',fetchImpl:async()=>response({id:'00000000-0000-4000-8000-000000000099'}),clock:()=>now});

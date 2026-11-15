@@ -135,6 +135,11 @@ export function createBroker({auth,keys,store,audit,trustedAudit,audience,enviro
       try {ack=await audit.append(intent);} catch {throw new BrokerError('AUDIT_INTENT_UNAVAILABLE',503);}
       must(verifyAuditAck(intent,ack,trustedAudit),'AUDIT_INTENT_UNVERIFIED',503);
       must(clock()<body.grant.exp,'GRANT_EXPIRED_BEFORE_EXECUTION');
+      // Recheck the same owner's session after the potentially slow audit hop.
+      // The transaction still needs its own atomic revocation design.
+      const refreshed=await auth.authenticate(token);
+      must(refreshed && refreshed.owner_id===c.user.owner_id && refreshed.aal==='aal2','AUTH_SESSION_DENIED',401);
+      must(clock()<body.grant.exp,'GRANT_EXPIRED_BEFORE_EXECUTION');
       let execution;
       try {
         execution=await store.executeCanary({owner_id:c.user.owner_id,action:c.action,

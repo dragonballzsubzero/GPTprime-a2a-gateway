@@ -43,8 +43,11 @@ export function createSupabaseAdapters({origin, anonKey, serviceKey, fetchImpl=f
   const auth={async authenticate(token){
     let claims;
     try {claims=jwtClaims(token);} catch {throw new BrokerError('AUTH_SESSION_DENIED',401);}
+    const now=clock();
     if(claims.iss!==base+'/auth/v1' || claims.aal!=='aal2' || !UUID.test(claims.sub || '') ||
-       !Number.isSafeInteger(claims.exp) || claims.exp<=clock())throw new BrokerError('AUTH_SESSION_DENIED',401);
+       !UUID.test(claims.session_id || '') || !Number.isSafeInteger(now) ||
+       !Number.isSafeInteger(claims.iat) || claims.iat>now+30 || claims.iat<now-900 ||
+       !Number.isSafeInteger(claims.exp) || claims.exp<=now)throw new BrokerError('AUTH_SESSION_DENIED',401);
     let res,user;
     try {
       res=await fetchImpl(base+'/auth/v1/user',{headers:{apikey:anonKey,authorization:'Bearer '+token},
@@ -56,6 +59,16 @@ export function createSupabaseAdapters({origin, anonKey, serviceKey, fetchImpl=f
     if(!user||typeof user!=='object'||Array.isArray(user)||typeof user.id!=='string')
       throw new BrokerError('AUTH_SERVICE_UNAVAILABLE',503);
     if(!user || user.id!==claims.sub)throw new BrokerError('AUTH_SESSION_DENIED',401);
+    let gate;
+    try {
+      gate=await request('/rest/v1/rpc/gptprime_v19_owner_session_gate_v1',{
+        p_user_id:user.id,p_session_id:claims.session_id,p_token_issued_at:new Date(claims.iat*1000).toISOString()});
+    }catch{throw new BrokerError('AUTH_SESSION_GATE_UNAVAILABLE',503);}
+    if(!gate||typeof gate!=='object'||Array.isArray(gate)||gate.schema!=='gptprime.owner-session-gate.v1'||
+       typeof gate.allowed!=='boolean'||typeof gate.code!=='string')
+      throw new BrokerError('AUTH_SESSION_GATE_UNAVAILABLE',503);
+    if(!gate.allowed)throw new BrokerError('AUTH_SESSION_DENIED',401);
+    if(gate.code!=='OWNER_SESSION_VERIFIED')throw new BrokerError('AUTH_SESSION_GATE_UNAVAILABLE',503);
     return {owner_id:user.id,aal:'aal2'};
   }};
   const keys={resolve(owner_id,node){return request('/rest/v1/rpc/sac_broker_v03_keys',{p_owner:owner_id,p_node:node});}};

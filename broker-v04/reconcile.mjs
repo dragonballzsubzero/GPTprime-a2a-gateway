@@ -9,13 +9,12 @@ const FIELDS=['schema','observer_id','source','owner_id','proposal_id','grant_sh
               'audience','environment','observed_at','status'];
 function exact(x,keys){return x&&typeof x==='object'&&!Array.isArray(x)&&Object.getPrototypeOf(x)===Object.prototype&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
 
-/** Verify separately signed observation; this cannot prove real-world truth by itself. */
-export function reconcile({intent,intent_ack,result,result_ack,observation,observation_signature,
-                           trustedAudit,trustedObserver,now=Math.floor(Date.now()/1000)}){
+function validateObservation({intent,intent_ack,result,observation,observation_signature,
+                              trustedAudit,trustedObserver,now}){
   if(!validEvent(intent)||intent.type!=='intent'||!validEvent(result)||result.type!=='result')throw Error('EVENT_INVALID');
   for(const key of ['owner_id','node','run','proposal_id','action_digest','grant_sha256','nonce','audience','environment'])
     if(intent[key]!==result[key])throw Error('EVENT_BINDING_MISMATCH');
-  if(!verifyAuditAck(intent,intent_ack,trustedAudit)||!verifyAuditAck(result,result_ack,trustedAudit))throw Error('AUDIT_ACK_INVALID');
+  if(!verifyAuditAck(intent,intent_ack,trustedAudit))throw Error('AUDIT_ACK_INVALID');
   if(!trustedObserver||!trustedObserver.public_jwk||trustedObserver.public_jwk.x===trustedAudit.public_jwk.x)
     throw Error('OBSERVER_KEY_NOT_DISTINCT');
   if(!exact(observation,FIELDS)||observation.schema!=='sac.effect-observation.v2'||
@@ -30,10 +29,32 @@ export function reconcile({intent,intent_ack,result,result_ack,observation,obser
     throw Error('OBSERVATION_BINDING_INVALID');
   if(!verifyEd25519(trustedObserver.public_jwk,observation_signature,OBS_DOMAIN+canonical(observation)))
     throw Error('OBSERVER_SIGNATURE_INVALID');
+}
+
+/** Verify separately signed observation; this cannot prove real-world truth by itself. */
+export function reconcile({intent,intent_ack,result,result_ack,observation,observation_signature,
+                           trustedAudit,trustedObserver,now=Math.floor(Date.now()/1000)}){
+  validateObservation({intent,intent_ack,result,observation,observation_signature,trustedAudit,trustedObserver,now});
+  if(!verifyAuditAck(result,result_ack,trustedAudit))throw Error('AUDIT_ACK_INVALID');
   return {status:'RECONCILED_SIGNED_OBSERVATION',execution_id:result.execution_id,
     intent_sha256:eventDigest(intent),result_sha256:eventDigest(result),
     observer_statement_sha256:sha256(canonical(observation)),
     limitation:'Signatures establish who attested; independent operational control and source truth require separate verification.'};
+}
+
+/** Recover a missing result log from a separately signed observation. This
+ * writes only to the audit sink and never calls the effect adapter. */
+export async function recoverAuditResult({intent,intent_ack,observation,observation_signature,
+                                         trustedAudit,trustedObserver,audit,now=Math.floor(Date.now()/1000)}){
+  if(!validEvent(intent)||intent.type!=='intent'||!observation||typeof audit?.append!=='function')
+    throw Error('RECOVERY_INPUT_INVALID');
+  const result={...intent,type:'result',execution_id:observation.execution_id,effect_sha256:observation.effect_sha256};
+  validateObservation({intent,intent_ack,result,observation,observation_signature,trustedAudit,trustedObserver,now});
+  let result_ack;
+  try{result_ack=await audit.append(result);}catch{throw Error('AUDIT_RESULT_RECORD_OUTCOME_UNKNOWN');}
+  const verified=reconcile({intent,intent_ack,result,result_ack,observation,observation_signature,
+                            trustedAudit,trustedObserver,now});
+  return {result,result_ack,reconciliation:verified,effect_retried:false};
 }
 
 if(process.argv[1]?.endsWith('/reconcile.mjs')){

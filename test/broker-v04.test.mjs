@@ -8,9 +8,10 @@ import {canonical,digest} from '../broker-v03/client.mjs';
 import {createBroker,verifyAuditAck,eventDigest,sha256,NODE_DOMAIN,GRANT_DOMAIN} from '../broker-v04/core.mjs';
 import {createBrokerHttpServer} from '../broker-v04/http.mjs';
 import {openAuditLedger} from '../broker-v04/audit-ledger.mjs';
-import {reconcile} from '../broker-v04/reconcile.mjs';
+import {reconcile,recoverAuditResult} from '../broker-v04/reconcile.mjs';
 import {validateApprovalRequest,signOwnerGrant} from '../broker-v04/owner-approve.mjs';
 import {signProposal} from '../broker-v04/proposal-client.mjs';
+import {observeExecution} from '../broker-v04/observer.mjs';
 
 const ownerId='00000000-0000-4000-8000-000000000001';
 const proposalId='00000000-0000-4000-8000-000000000002';
@@ -133,6 +134,12 @@ test('expiry after audit intent prevents execution',async()=>{
   await assert.rejects(createBroker(f.deps).execute(bearer,f.request),errorCode('GRANT_EXPIRED_BEFORE_EXECUTION'));
   assert.equal(f.calls.executions,0);
 });
+test('owner session revoked during audit hop blocks execution',async()=>{
+  const f=fixture();let calls=0;
+  f.deps.auth.authenticate=async()=>++calls===1?{owner_id:ownerId,aal:'aal2'}:null;
+  await assert.rejects(createBroker(f.deps).execute(bearer,f.request),errorCode('AUTH_SESSION_DENIED'));
+  assert.equal(f.calls.events.length,1);assert.equal(f.calls.executions,0);
+});
 test('result logging failure reports executed and pending, never automatic retry',async()=>{
   const f=fixture(),original=f.deps.audit.append;
   f.deps.audit.append=async e=>{if(e.type==='result')throw Error('sink unavailable');return original(e);};
@@ -234,4 +241,36 @@ test('independently signed observation is needed to reconcile a logged effect',a
   const otherIntentAck=await f.deps.audit.append(otherIntent),otherResultAck=await f.deps.audit.append(otherResult);
   assert.throws(()=>reconcile({...params,intent:otherIntent,intent_ack:otherIntentAck,
     result:otherResult,result_ack:otherResultAck}),/OBSERVATION_BINDING_INVALID/);
+});
+test('observer binds owner grant and independently read execution before signing',async()=>{
+  const f=fixture();
+  const effect=sha256([ownerId,f.action.node,digest(f.action),f.action.parameters.tag].join(':'));
+  f.deps.store.executeCanary=async()=>({executed:true,execution_id:executionId,effect_sha256:effect});
+  await createBroker(f.deps).execute(bearer,f.request);
+  const observer=generateKeyPairSync('ed25519');
+  const row={execution_id:executionId,owner_id:ownerId,proposal_id:proposalId,action_digest:digest(f.action),
+    grant_sha256:f.calls.events[0].grant_sha256,effect_sha256:effect,
+    operation:'audit_canary',resource:'sac://broker/canary'};
+  const args={intent:f.calls.events[0],intent_ack:f.calls.acks[0],action:f.action,grant:f.grant,
+    grant_signature_b64url:f.request.grant_signature_b64url,execution_id:executionId,
+    trustedAudit:f.deps.trustedAudit,trustedOwner:{owner_id:ownerId,kid:'owner-key-1',public_jwk:jwk(f.owner)},
+    observer:{id:'observer-1',source:'readonly-db',audience,environment,public_jwk:jwk(observer)},
+    source:{readExecution:async()=>row},signer:async bytes=>sign(null,bytes,observer.privateKey),clock:()=>N+2};
+  const attested=await observeExecution(args);
+  const trustedObserver={id:'observer-1',allowed_sources:['readonly-db'],public_jwk:jwk(observer)};
+  assert.equal(reconcile({intent:f.calls.events[0],intent_ack:f.calls.acks[0],result:f.calls.events[1],
+    result_ack:f.calls.acks[1],...attested,trustedAudit:f.deps.trustedAudit,trustedObserver,now:N+3}).status,
+    'RECONCILED_SIGNED_OBSERVATION');
+  await assert.rejects(observeExecution({...args,source:{readExecution:async()=>({...row,grant_sha256:'e'.repeat(64)})}}),/INDEPENDENT_SOURCE_MISMATCH/);
+  await assert.rejects(observeExecution({...args,signer:async bytes=>sign(null,bytes,f.owner.privateKey)}),/OBSERVER_SIGNER_KEY_MISMATCH/);
+  await assert.rejects(observeExecution({...args,grant:{...f.grant,nonce:'2'.repeat(32)}}),/OWNER_GRANT_OR_INTENT_MISMATCH/);
+  let recoveredWrites=0;
+  const originalAudit=f.deps.audit.append;
+  const recovered=await recoverAuditResult({intent:f.calls.events[0],intent_ack:f.calls.acks[0],...attested,
+    trustedAudit:f.deps.trustedAudit,trustedObserver,audit:{append:async event=>{recoveredWrites++;return originalAudit(event);}},now:N+3});
+  assert.equal(recovered.effect_retried,false);assert.equal(recoveredWrites,1);
+  assert.equal(recovered.reconciliation.status,'RECONCILED_SIGNED_OBSERVATION');
+  await assert.rejects(recoverAuditResult({intent:f.calls.events[0],intent_ack:f.calls.acks[0],...attested,
+    observation:{...attested.observation,grant_sha256:'f'.repeat(64)},trustedAudit:f.deps.trustedAudit,trustedObserver,
+    audit:{append:async()=>{throw Error('must not be called');}},now:N+3}),/OBSERVATION_BINDING_INVALID/);
 });

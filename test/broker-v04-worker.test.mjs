@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,symlinkSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,symlinkSync,rmSync,copyFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -34,4 +34,18 @@ test('triage wrapper passes restrictive arguments to a mocked rootless Docker CL
     '--security-opt=no-new-privileges','--pids-limit=32','--memory=256m','--memory-swap=256m','--cpus=0.5'])
     assert.ok(args.includes(required),required);
   assert.ok(args.some(x=>x.startsWith('seccomp=')));
+}));
+test('v0.4 scanner entry returns failure for rejected input and advisory for inert text',()=>fixture(({dir,input})=>{
+  const entry=path.join(dir,'triage_entry.py'),scanner=path.join(dir,'triage_worker.py');
+  copyFileSync('broker-v04/worker/triage_entry.py',entry);
+  copyFileSync('broker-v03/worker/triage_worker.py',scanner);
+  let p=spawnSync('python3',['-I','-B',entry,input],{encoding:'utf8'});
+  assert.equal(p.status,0,p.stderr);assert.equal(JSON.parse(p.stdout).status,'ADVISORY_ONLY');
+  const archive=path.join(dir,'traversal.zip');
+  p=spawnSync('python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1],'w');z.writestr('../escape','inert');z.close()",archive],{encoding:'utf8'});
+  assert.equal(p.status,0,p.stderr);
+  p=spawnSync('python3',['-I','-B',entry,archive],{encoding:'utf8'});
+  assert.equal(p.status,1,p.stderr);assert.equal(JSON.parse(p.stdout).reason,'ZIP_PATH_TRAVERSAL');
+  p=spawnSync('python3',['-I','-B',entry,path.join(dir,'missing')],{encoding:'utf8'});
+  assert.equal(p.status,1,p.stderr);assert.equal(JSON.parse(p.stdout).status,'REJECT');
 }));
