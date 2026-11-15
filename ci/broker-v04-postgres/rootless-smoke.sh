@@ -3,28 +3,7 @@
 # profile below is deliberately incomplete and is NOT a production profile.
 set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
-sudo apt-get update -qq
-sudo apt-get install -y -qq uidmap rootlesskit slirp4netns docker-ce-rootless-extras
-if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
-  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
-fi
-if ! grep -q "^$(id -un):" /etc/subuid; then sudo usermod --add-subuids 100000-165535 "$(id -un)"; fi
-if ! grep -q "^$(id -un):" /etc/subgid; then sudo usermod --add-subgids 100000-165535 "$(id -un)"; fi
-export XDG_RUNTIME_DIR="${RUNNER_TEMP:?}/sac-rootless-runtime"
-mkdir -p "$XDG_RUNTIME_DIR"
-chmod 700 "$XDG_RUNTIME_DIR"
-export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
-log="$RUNNER_TEMP/sac-rootless-dockerd.log"
-dockerd-rootless.sh --host="$DOCKER_HOST" --data-root="$RUNNER_TEMP/sac-rootless-data" >"$log" 2>&1 &
-daemon=$!
-trap 'kill "$daemon" 2>/dev/null || true' EXIT
-ready=0
-for _ in $(seq 1 90); do
-  if docker info >/dev/null 2>&1; then ready=1; break; fi
-  if ! kill -0 "$daemon" 2>/dev/null; then break; fi
-  sleep 1
-done
-if [ "$ready" -ne 1 ]; then cat "$log" >&2; exit 1; fi
+test -n "${DOCKER_HOST:-}"
 docker info --format '{{json .SecurityOptions}}' | grep -q 'name=rootless'
 echo 'PASS separate Docker daemon reports rootless mode'
 docker pull python:3.13-slim
