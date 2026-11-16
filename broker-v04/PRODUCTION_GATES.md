@@ -16,4 +16,6 @@ On 2026-11-15, the v0.4 function was installed in the live database with no API 
 
 The old v0.3 effect RPC and direct API-role broker-table writes were subsequently revoked in the same project, after an empty-state guard and disposable PostgreSQL tests. The v0.3 proposal RPC remains a security-definer indirect write path, and the service credential remains broad; neither a least-privilege runtime nor independent signature admission has been deployed.
 
+An owner-console sign-in attempt later timed out and no session was established. Auth logs and intermittent management SQL timeouts are summarized, without credentials, in `AUTH_CONNECTIVITY_2026-11-16.md`. Owner MFA and binding remain unverified.
+
 No automated check in this repository should promote the release to production. A reviewer must verify the deployed artifacts and all required independent evidence under the actual host and operator boundaries.
