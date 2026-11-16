@@ -2,19 +2,27 @@ import http from 'node:http';
 import {createHash,timingSafeEqual} from 'node:crypto';
 
 /** Loopback-only HTTP component; production TLS and broker egress are external gates. */
-export function createAuditHttpServer({ledger,bearerToken}){
+export function createAuditHttpServer({ledger,bearerToken,readerToken=null}){
   if(!ledger?.append || !ledger?.signedHead || typeof bearerToken!=='string' || bearerToken.length<32 || /[\r\n]/.test(bearerToken))
     throw new Error('AUDIT_CONFIGURATION_INVALID');
+  if(readerToken!==null&&(typeof readerToken!=='string'||readerToken.length<32||/[\r\n]/.test(readerToken)||
+     readerToken===bearerToken||!ledger.snapshot))throw new Error('AUDIT_READER_CONFIGURATION_INVALID');
   const expected=createHash('sha256').update(bearerToken).digest();
+  const reader=readerToken===null?null:createHash('sha256').update(readerToken).digest();
   return http.createServer(async(req,res)=>{
     const reply=(status,obj)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(obj));};
     const isAppend=req.method==='POST'&&req.url==='/append';
     const isHead=req.method==='GET'&&req.url==='/head';
-    if(!isAppend&&!isHead)return reply(404,{error:'NOT_FOUND'});
+    const isSnapshot=req.method==='GET'&&req.url==='/snapshot'&&reader!==null;
+    if(!isAppend&&!isHead&&!isSnapshot)return reply(404,{error:'NOT_FOUND'});
     const h=req.headers.authorization||'';
     const supplied=h.startsWith('Bearer ')?h.slice(7):'';
     const candidate=createHash('sha256').update(supplied).digest();
-    if(!timingSafeEqual(expected,candidate))return reply(401,{error:'AUTH_REQUIRED'});
+    const authorized=isSnapshot?timingSafeEqual(reader,candidate):timingSafeEqual(expected,candidate);
+    if(!authorized)return reply(401,{error:'AUTH_REQUIRED'});
+    if(isSnapshot){
+      try{return reply(200,await ledger.snapshot());}catch{return reply(503,{error:'AUDIT_UNAVAILABLE'});}
+    }
     if(isHead){
       try{return reply(200,await ledger.signedHead());}catch{return reply(503,{error:'AUDIT_UNAVAILABLE'});}
     }

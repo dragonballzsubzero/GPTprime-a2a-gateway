@@ -10,9 +10,11 @@ const port=Number(process.env.SAC_AUDIT_PORT||8791);
 if(!Number.isInteger(port)||port<1||port>65535)throw new Error('INVALID_PORT');
 const privatePem=await readPrivateFile(process.env.SAC_AUDIT_PRIVATE_KEY_PATH);
 const bearerToken=(await readPrivateFile(process.env.SAC_AUDIT_TOKEN_PATH)).trim();
+const readerToken=process.env.SAC_AUDIT_READER_TOKEN_PATH?
+  (await readPrivateFile(process.env.SAC_AUDIT_READER_TOKEN_PATH)).trim():null;
 const anchor=process.env.SAC_AUDIT_ANCHOR_PATH?JSON.parse(await readPrivateFile(process.env.SAC_AUDIT_ANCHOR_PATH)):null;
 if(process.env.SAC_AUDIT_ANCHOR_PATH && (anchor===null||typeof anchor!=='object'))throw Error('AUDIT_ANCHOR_INVALID');
 const ledger=await openAuditLedger({directory:process.env.SAC_AUDIT_DIR,sinkId:process.env.SAC_AUDIT_SINK_ID,privatePem,anchor});
-const server=createAuditHttpServer({ledger,bearerToken});
+const server=createAuditHttpServer({ledger,bearerToken,readerToken});
 server.listen(port,host,()=>console.log(JSON.stringify({service:'sac-audit-v04',bind:host,port,production_qualified:false})));
 for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>server.close(async()=>{await ledger.close();process.exit(0);}));

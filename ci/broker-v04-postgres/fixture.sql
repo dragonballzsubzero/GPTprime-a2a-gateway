@@ -1,7 +1,11 @@
 -- Isolated synthetic CI database. Never run against a real project.
 create role anon nologin;
 create role authenticated nologin;
+create role service_role nologin;
 create role broker_fixture nologin;
+-- Reproduce Supabase's default EXECUTE grants for functions created by postgres.
+alter default privileges for role postgres in schema public
+  grant execute on functions to anon,authenticated,service_role;
 create schema extensions;
 create extension pgcrypto with schema extensions;
 create schema sac_broker_v03;

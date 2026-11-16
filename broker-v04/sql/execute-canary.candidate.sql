@@ -7,7 +7,13 @@
 -- execute it. This candidate deliberately does not auto-create grants or keys.
 
 begin;
-create or replace function public.sac_broker_v04_execute_canary(
+do $guard$
+begin
+  if pg_catalog.to_regprocedure('public.sac_broker_v04_execute_canary(uuid,text,text,text,text,uuid,text,bigint,bigint,text,text,text,text,text)') is not null then
+    raise exception 'SAC_BROKER_V04_FUNCTION_ALREADY_EXISTS';
+  end if;
+end $guard$;
+create function public.sac_broker_v04_execute_canary(
   p_owner uuid, p_node text, p_run text, p_digest text, p_nonce text,
   p_proposal uuid, p_canary_tag text, p_grant_iat bigint, p_grant_exp bigint,
   p_owner_kid text, p_node_kid text, p_grant_sha256 text,
@@ -94,7 +100,19 @@ begin
 end $$;
 
 revoke all on function public.sac_broker_v04_execute_canary(uuid,text,text,text,text,uuid,text,bigint,bigint,text,text,text,text,text)
-  from public,anon,authenticated;
+  from public,anon,authenticated,service_role;
+do $acl$
+declare f oid:=pg_catalog.to_regprocedure('public.sac_broker_v04_execute_canary(uuid,text,text,text,text,uuid,text,bigint,bigint,text,text,text,text,text)');
+begin
+  if f is null or pg_catalog.has_function_privilege('anon',f,'EXECUTE') or
+     pg_catalog.has_function_privilege('authenticated',f,'EXECUTE') or
+     pg_catalog.has_function_privilege('service_role',f,'EXECUTE') or
+     exists(select 1 from pg_catalog.pg_proc p,
+       lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+       where p.oid=f and a.grantee=0 and a.privilege_type='EXECUTE') then
+    raise exception 'SAC_BROKER_V04_UNSAFE_FUNCTION_ACL';
+  end if;
+end $acl$;
 -- An operator must explicitly grant EXECUTE to the narrow trusted runtime role
 -- after reviewing table/view/RPC privileges. No grant is made by this candidate.
 commit;

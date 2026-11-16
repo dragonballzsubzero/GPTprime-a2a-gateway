@@ -62,6 +62,9 @@ def start_hold(sql):
 print('PostgreSQL', query('show server_version;'), 'container image', image, flush=True)
 psql(Path('ci/broker-v04-postgres/fixture.sql').read_text())
 psql(Path('broker-v04/sql/execute-canary.candidate.sql').read_text())
+duplicate=psql(Path('broker-v04/sql/execute-canary.candidate.sql').read_text(),ok=False)
+check(duplicate.returncode!=0 and 'SAC_BROKER_V04_FUNCTION_ALREADY_EXISTS' in duplicate.stderr,
+      'installation refuses to overwrite an existing function')
 
 nonce='1'*32
 with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
@@ -126,7 +129,7 @@ check(holder.wait(timeout=10)==0 and p.returncode!=0 and 'GRANT_EXPIRED_DURING_A
 check(query("select count(*) from sac_broker_v03.spent_grants where nonce='"+nonce+"'")=='0' and
       query('select count(*) from sac_broker_v03.executions')=='1', 'expired wait writes no effect or spent nonce')
 
-for role in ('anon','authenticated'):
+for role in ('anon','authenticated','service_role'):
     p=psql('set role '+role+'; '+execute('9'*32),ok=False)
     check(p.returncode!=0 and 'permission denied' in p.stderr, role+' cannot call the candidate function')
 
@@ -135,4 +138,54 @@ psql('grant usage on schema sac_broker_v03, gptprime_v19, extensions to broker_f
 p=psql('set role broker_fixture; '+execute('a'*32),ok=False)
 check(p.returncode!=0 and 'permission denied' in p.stderr,
       'invoker cannot execute without table access; database privilege redesign is still required')
+
+# Synthetic v0.3 effect function and broad grants mirror the relevant legacy
+# privilege pattern, not its full production implementation.
+psql("create function public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text) "
+     "returns jsonb language sql security definer as $$select '{}'::jsonb$$; "
+     "grant execute on function public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text) to service_role; "
+     "grant usage on schema sac_broker_v03 to service_role; "
+     "grant select,insert,update,delete,truncate on all tables in schema sac_broker_v03 to service_role;")
+legacy=Path('broker-v04/sql/lock-empty-legacy.candidate.sql').read_text()
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_NOT_EMPTY' in guarded.stderr and
+      query("select has_function_privilege('service_role','public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text)','execute')")=='t' and
+      query("select has_table_privilege('service_role','sac_broker_v03.executions','insert')")=='t',
+      'legacy lockdown refuses nonempty data without changing existing privileges')
+psql('truncate sac_broker_v03.audit_evidence,sac_broker_v03.executions,sac_broker_v03.proposals,'
+     'sac_broker_v03.spent_grants,sac_broker_v03.owner_keys,sac_broker_v03.node_keys;')
+holder=start_hold("begin; insert into sac_broker_v03.owner_keys(owner_id,public_jwk,key_id) "
+                  "values('33333333-3333-4333-8333-333333333333','{}','concurrent'); "
+                  "select pg_sleep(2) /* ci-lock-holder */; commit;")
+guarded=psql(legacy,ok=False)
+check(holder.wait(timeout=10)==0 and guarded.returncode!=0 and 'SAC_BROKER_LEGACY_NOT_EMPTY' in guarded.stderr,
+      'legacy lockdown waits for a concurrent key insert and then fails closed')
+psql('delete from sac_broker_v03.owner_keys;')
+psql('create role inherited_fixture nologin; grant inherited_fixture to service_role; '
+     'grant insert on sac_broker_v03.executions to inherited_fixture;')
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_WRITE_STILL_GRANTED' in guarded.stderr and
+      query("select has_function_privilege('service_role','public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text)','execute')")=='t',
+      'inherited broker write privilege aborts the entire legacy lockdown')
+psql('revoke inherited_fixture from service_role;')
+psql('create role column_fixture nologin; grant column_fixture to service_role; '
+     'grant insert (canary_tag) on sac_broker_v03.executions to column_fixture;')
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_COLUMN_WRITE_STILL_GRANTED' in guarded.stderr,
+      'inherited column-level write privilege aborts the entire legacy lockdown')
+psql('revoke column_fixture from service_role;')
+psql('create role set_fixture nologin; grant set_fixture to service_role with inherit false, set true; '
+     'grant insert on sac_broker_v03.executions to set_fixture;')
+guarded=psql(legacy,ok=False)
+check(guarded.returncode!=0 and 'SAC_BROKER_LEGACY_WRITE_STILL_GRANTED' in guarded.stderr,
+      'a non-inherited but assumable role with write access aborts the legacy lockdown')
+psql('revoke set_fixture from service_role;')
+psql(legacy)
+for role in ('anon','authenticated','service_role'):
+    check(query("select not has_function_privilege('"+role+"','public.sac_broker_v03_execute_canary(uuid,text,text,text,text,uuid,text,text,text)','execute')")=='t',
+          role+' cannot execute the legacy effect RPC after lockdown')
+    check(query("select not has_table_privilege('"+role+"','sac_broker_v03.executions','INSERT,UPDATE,DELETE,TRUNCATE')")=='t',
+          role+' cannot directly write the legacy execution table after lockdown')
+check(query("select has_table_privilege('service_role','sac_broker_v03.executions','select')")=='t',
+      'legacy lockdown preserves existing read privileges')
 print('PostgreSQL candidate checks completed; fixture is not a production trust gate.',flush=True)
